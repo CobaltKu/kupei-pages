@@ -13,9 +13,23 @@
 </header>
 <div class="notice">分數為試算版本，<b>模型效度尚未完全驗證</b>；只供篩選與瀏覽，不是投資建議。資料為每日收盤，非即時。</div>
 <div id="error" class="error" hidden></div>
+<div id="notice" class="notice toast" hidden role="status"></div>
 <div class="tools">
   <input id="q" type="search" placeholder="搜尋代號、名稱或產業" aria-label="搜尋">
+  <label class="chk"><input id="only-watch" type="checkbox"> 只看自選</label>
   <span id="count" class="count"></span>
+  <details id="settings" class="settings">
+    <summary><span id="sync-state" class="sync">雲端同步：未設定</span></summary>
+    <div class="settings-body">
+      <p>貼上<b>寫入權杖</b>（由維護者另外提供，只存在這台裝置），自選就會存到雲端、換裝置同步。沒有也能用，只是自選只存在這個瀏覽器。</p>
+      <div class="row">
+        <input id="write-token" type="password" placeholder="寫入權杖" autocomplete="off" spellcheck="false">
+        <button id="token-save" type="button">連線</button>
+        <button id="token-clear" type="button" class="ghost">清除</button>
+      </div>
+      <p id="sync-msg" class="muted"></p>
+    </div>
+  </details>
 </div>
 <div class="wrap"><table id="tbl"><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
 <script type="module" src="/src/main.ts"></script>

@@ -166,3 +166,20 @@ export interface MarketStatus {
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown }
 }
+
+// ── 雲端文件（需寫入權杖） ──
+
+export interface DocMeta {
+  key: string
+  version: number
+  updatedAt: string | null
+  bytes: number
+}
+
+/** 沒有這份文件時 version 0、data null；第一次寫入帶 baseVersion 0 */
+export interface Doc<T = unknown> {
+  key: string
+  version: number
+  updatedAt: string | null
+  data: T | null
+}
