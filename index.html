@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KuPei 唯讀評分</title>
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header>
+  <h1>KuPei 唯讀評分</h1>
+  <div id="meta" class="meta">載入中…</div>
+</header>
+<div class="notice">分數為試算版本，<b>模型效度尚未完全驗證</b>；只供篩選與瀏覽，不是投資建議。資料為每日收盤，非即時。</div>
+<div id="error" class="error" hidden></div>
+<div class="tools">
+  <input id="q" type="search" placeholder="搜尋代號、名稱或產業" aria-label="搜尋">
+  <span id="count" class="count"></span>
+</div>
+<div class="wrap"><table id="tbl"><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

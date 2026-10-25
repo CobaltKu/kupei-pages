@@ -1,0 +1,45 @@
+# 推到 main 就建置並部署到 GitHub Pages。
+# 事前設定（repo Settings）：
+#   Pages → Build and deployment → Source：GitHub Actions
+#   Secrets and variables → Actions → Secrets：VITE_KUPEI_TOKEN（權杖，只在建置時注入，不進原始碼）
+#   Secrets and variables → Actions → Variables：VITE_KUPEI_BASE（後端網址）
+name: deploy-pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          # repo 名稱當子路徑；repo 叫 <帳號>.github.io 的話把這行改成 PAGES_BASE: /
+          PAGES_BASE: /${{ github.event.repository.name }}/
+          VITE_KUPEI_BASE: ${{ vars.VITE_KUPEI_BASE }}
+          VITE_KUPEI_TOKEN: ${{ secrets.VITE_KUPEI_TOKEN }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
