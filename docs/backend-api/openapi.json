@@ -1,0 +1,1396 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "KuPei 唯讀 API",
+    "version": "1.0.0",
+    "description": "評分資料與每日收盤行情的唯讀介面。人類可讀的說明、資料型別與排序規則見 KuPei-API.md。 使用者帳號（/api/auth/*）登入後可讀寫自己的雲端文件。"
+  },
+  "servers": [
+    {
+      "url": "https://kupei-dashboard.tmac19920626.workers.dev"
+    }
+  ],
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "唯讀權杖（評分、行情）、使用者登入權杖 kps_…（多了 /api/store，依帳號分開）或寫入權杖（多了 /api/store，共用一份）。寫入權杖由使用者在 App 輸入，不進建置"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "BAD_REQUEST",
+                  "UNAUTHENTICATED",
+                  "FORBIDDEN",
+                  "RATE_LIMITED",
+                  "VERSION_CONFLICT",
+                  "TOO_LARGE",
+                  "NOT_FOUND",
+                  "INVALID_CREDENTIALS",
+                  "USERNAME_TAKEN"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {}
+            }
+          }
+        }
+      },
+      "Manifest": {
+        "type": "object",
+        "required": [
+          "run",
+          "published_at",
+          "details"
+        ],
+        "properties": {
+          "run": {
+            "type": "string",
+            "example": "local_full_20261014_171209",
+            "description": "目前批次編號，/data/<run>/ 底下的檔案發布後不再變動"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source_file": {
+            "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "有明細樹的公司代號"
+          },
+          "hashes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "批次檔的內容雜湊（網址帶 ?v=<雜湊>）。固定鍵 summary、vparams、tr、nodes 永遠在；可選鍵 help、valuation、node_info 只有該批次交付了對應檔案才有。之後可能新增鍵"
+          },
+          "status_notes": {
+            "type": "object"
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "required": [
+          "head",
+          "majors",
+          "rows"
+        ],
+        "properties": {
+          "head": {
+            "type": "object",
+            "properties": {
+              "requested_period": {
+                "type": "string",
+                "example": "2026Q2"
+              },
+              "annual_period": {
+                "type": "string",
+                "example": "2025Q4"
+              },
+              "spec_version": {
+                "type": "string",
+                "example": "V0.0.26"
+              },
+              "as_of": {
+                "type": "string",
+                "format": "date"
+              },
+              "source_run": {
+                "type": "string"
+              },
+              "rank_population": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "description": "每個大項的排名母體人數（排除金融保險業）"
+              },
+              "counts": {
+                "type": "object",
+                "properties": {
+                  "records": {
+                    "type": "integer"
+                  },
+                  "ranked": {
+                    "type": "integer"
+                  },
+                  "NR": {
+                    "type": "integer"
+                  },
+                  "veto": {
+                    "type": "integer"
+                  },
+                  "fin_review": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "gate_overlay": {
+                "type": "object"
+              }
+            }
+          },
+          "majors": {
+            "type": "array",
+            "description": "12 個大項，順序與每列 rows[i][6] 相同",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "en": {
+                  "type": "string"
+                },
+                "zh": {
+                  "type": "string"
+                },
+                "goal": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rows": {
+            "type": "array",
+            "description": "每列：[代號, 名稱, 產業, 金融業(0|1), 總名次|null, 政策分大項數|null, 大項[12], 否決(0|1), 否決來源[], 財務複核(0|1), 複核來源[]]。大項每格：[分數|null, 標記字, 大項名次|null, 是否政策分(0|1), 是否含政策分成分(0|1), 狀態, 下層觸發數, own]",
+            "items": {
+              "type": "array",
+              "items": {}
+            }
+          }
+        }
+      },
+      "Quotes": {
+        "type": "object",
+        "properties": {
+          "dates": {
+            "type": "object",
+            "properties": {
+              "L": {
+                "type": "string",
+                "nullable": true,
+                "format": "date"
+              },
+              "O": {
+                "type": "string",
+                "nullable": true,
+                "format": "date"
+              }
+            }
+          },
+          "quotes": {
+            "type": "object",
+            "description": "代號 → [收盤(null＝當日無成交), 漲跌價差, 成交股數]",
+            "additionalProperties": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "number",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "History": {
+        "type": "object",
+        "properties": {
+          "quotes": {
+            "type": "object",
+            "description": "代號 → [[日期, 收盤, 成交股數], …]，近 20 個交易日，舊→新",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {}
+              }
+            }
+          },
+          "revenue": {
+            "type": "object",
+            "description": "代號 → [[年月, 營收(千元), 年增率%], …]，近 5 個月，舊→新",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {}
+              }
+            }
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "counts": {
+            "type": "object",
+            "properties": {
+              "quoteDays": {
+                "type": "integer"
+              },
+              "firstDay": {
+                "type": "string",
+                "nullable": true
+              },
+              "lastDay": {
+                "type": "string",
+                "nullable": true
+              },
+              "revenueMonths": {
+                "type": "integer"
+              },
+              "firstMonth": {
+                "type": "string",
+                "nullable": true
+              },
+              "lastMonth": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "runs": {
+            "type": "array",
+            "description": "最近 12 次抓取結果",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "DocMeta": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "Doc": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "description": "0 ＝ 還沒有這份文件"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "description": "任意 JSON；沒有時 null",
+            "nullable": true
+          }
+        }
+      },
+      "PutDoc": {
+        "type": "object",
+        "required": [
+          "baseVersion",
+          "data"
+        ],
+        "properties": {
+          "baseVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "目前雲端版本；第一次 0"
+          },
+          "data": {
+            "description": "任意 JSON，序列化後 ≤ 256 KB"
+          }
+        }
+      },
+      "Credentials": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 32,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$",
+            "description": "不分大小寫，伺服器轉小寫存；開頭英數",
+            "example": "coku"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "區分大小寫，前後空白也算"
+          }
+        }
+      },
+      "AuthUser": {
+        "type": "object",
+        "required": [
+          "id",
+          "username"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "required": [
+          "user",
+          "token",
+          "expiresAt"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          },
+          "token": {
+            "type": "string",
+            "pattern": "^kps_[A-Za-z0-9_-]{43}$",
+            "description": "登入權杖，之後用 Authorization: Bearer <token>；伺服器只存 SHA-256"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "30 天後到期（UTC）"
+          }
+        }
+      },
+      "RegisterBody": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Credentials"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "inviteCode": {
+                "type": "string",
+                "description": "邀請碼。GET /api/auth/config 的 inviteRequired 為 true 時必填；關閉時忽略"
+              }
+            }
+          }
+        ]
+      },
+      "AuthConfig": {
+        "type": "object",
+        "required": [
+          "inviteRequired"
+        ],
+        "properties": {
+          "inviteRequired": {
+            "type": "boolean",
+            "description": "true＝註冊要填邀請碼（不回傳邀請碼本身）"
+          }
+        }
+      },
+      "ChangePasswordBody": {
+        "type": "object",
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "區分大小寫，前後空白也算"
+          }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "沒帶權杖或權杖不對",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "權杖有效，但此路徑不開放",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "/api/* 每個 IP 每分鐘最多 30 次；回應帶 Retry-After: 30",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "baseVersion 不是最新；error.details 是雲端最新的 Doc",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AuthRateLimited": {
+        "description": "註冊＋登入＋改密碼合計每個 IP 每分鐘 10 次；回應帶 Retry-After: 30",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "SessionInvalid": {
+        "description": "UNAUTHENTICATED：登入權杖無效、過期或已登出",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "Run": {
+        "name": "run",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "批次編號，取自 /data/manifest.json 的 run"
+      },
+      "DocKey": {
+        "name": "key",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
+        },
+        "description": "小寫英數與連字號，1～40 字"
+      }
+    }
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "健康檢查",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "服務在線",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/data/manifest.json": {
+      "get": {
+        "summary": "目前批次的索引",
+        "description": "先讀這個取得 run；每次都要重新讀。",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Manifest"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/data/{run}/summary.json": {
+      "get": {
+        "summary": "全部公司的分數與名次（緊湊陣列）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/data/{run}/details/{code}.json": {
+      "get": {
+        "summary": "單一公司的分數樹（最多三層）",
+        "description": "只有 manifest.details 列出的代號才有；其餘 404。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          },
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "節點陣列，每個節點有 id、en、zh、w、p、s、st、r、src、below、rd、c（子節點）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "該公司沒有明細"
+          }
+        }
+      }
+    },
+    "/data/{run}/nodes.json": {
+      "get": {
+        "summary": "節點 id → 英文名稱",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "description": "永遠存在。批次交付的 nodes 是 id → 字串時直接用交付版；交付的是物件形（完整定義）時，這裡仍是 id → 英文名稱，完整定義另見 node_info.json。"
+      }
+    },
+    "/data/{run}/tr.json": {
+      "get": {
+        "summary": "原因碼 → 中文",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/data/{run}/vparams.json": {
+      "get": {
+        "summary": "估價參數表",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {}
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/data/{run}/help.json": {
+      "get": {
+        "summary": "說明頁定義（可選）",
+        "description": "**可選**：只有 manifest.hashes 有 `help` 鍵時才存在，沒有就 404。內容是任意 JSON，形狀由評分批次交付方決定，後端原樣發布、不檢查。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "description": "manifest.hashes 對應鍵的值；帶了伺服器回 immutable 一年快取，不帶則每次驗證",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "任意 JSON"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "這個批次沒有交付這個檔案（manifest.hashes 沒有對應鍵時就不要請求）。內文是純文字"
+          }
+        }
+      }
+    },
+    "/data/{run}/valuation.json": {
+      "get": {
+        "summary": "估價（可選）",
+        "description": "**可選**：只有 manifest.hashes 有 `valuation` 鍵時才存在，沒有就 404。JSON 物件，後端不計算、不檢查內部形狀，原樣發布；欄位意義以批次交付方的說明為準。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "description": "manifest.hashes 對應鍵的值；帶了伺服器回 immutable 一年快取，不帶則每次驗證",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "這個批次沒有交付這個檔案（manifest.hashes 沒有對應鍵時就不要請求）。內文是純文字"
+          }
+        }
+      }
+    },
+    "/data/{run}/node_info.json": {
+      "get": {
+        "summary": "節點完整定義（可選）",
+        "description": "**可選**：只有 manifest.hashes 有 `node_info` 鍵時才存在，沒有就 404。節點 id → 定義物件。批次交付的 nodes 是物件形時才有；物件內的欄位由批次交付方決定，後端原樣發布。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Run"
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "description": "manifest.hashes 對應鍵的值；帶了伺服器回 immutable 一年快取，不帶則每次驗證",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "這個批次沒有交付這個檔案（manifest.hashes 沒有對應鍵時就不要請求）。內文是純文字"
+          }
+        }
+      }
+    },
+    "/api/market/latest": {
+      "get": {
+        "summary": "各市場最新交易日的收盤行情",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quotes"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/market/history": {
+      "get": {
+        "summary": "近 20 個交易日收盤與近 5 個月營收",
+        "parameters": [
+          {
+            "name": "codes",
+            "in": "query",
+            "required": true,
+            "description": "1～30 個 4 碼代號，逗號分隔",
+            "schema": {
+              "type": "string",
+              "example": "2330,2454"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/History"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "codes 不是 1～30 個 4 碼代號",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/market/status": {
+      "get": {
+        "summary": "行情資料範圍與最近抓取結果",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/store": {
+      "get": {
+        "summary": "雲端文件列表（需登入或寫入權杖）",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "docs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DocMeta"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        },
+        "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
+      }
+    },
+    "/api/store/{key}": {
+      "get": {
+        "summary": "讀一份雲端文件（需登入或寫入權杖）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DocKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK；沒有時 version 0、data null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Doc"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "key 格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
+      },
+      "put": {
+        "summary": "整包寫入（樂觀鎖）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DocKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDoc"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已寫入",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "integer"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "內容或 key 不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "description": "超過 256 KB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        },
+        "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
+      },
+      "delete": {
+        "summary": "刪除（版本相符才刪）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DocKey"
+          },
+          {
+            "name": "baseVersion",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已刪除"
+          },
+          "404": {
+            "description": "沒有這份文件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "summary": "註冊帳號並直接登入",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已註冊，回傳登入權杖",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BAD_REQUEST：帳號或密碼格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "USERNAME_TAKEN：帳號已被使用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/AuthRateLimited"
+          },
+          "403": {
+            "description": "INVITE_REQUIRED：註冊需要邀請碼但沒填；INVITE_INVALID：邀請碼不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "summary": "登入",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登入成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BAD_REQUEST：格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "INVALID_CREDENTIALS：帳號不存在或密碼錯（同一個訊息）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/AuthRateLimited"
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "summary": "登出（作廢這個登入權杖）",
+        "description": "需要 Authorization: Bearer <登入權杖>",
+        "responses": {
+          "200": {
+            "description": "已登出",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/SessionInvalid"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "summary": "目前登入的帳號",
+        "description": "需要 Authorization: Bearer <登入權杖>",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/AuthUser"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/SessionInvalid"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/auth/password": {
+      "post": {
+        "summary": "改密碼",
+        "description": "需要 Authorization: Bearer <登入權杖>。成功後這個帳號所有登入權杖都失效（含這台的舊權杖），回傳給這台的新權杖（格式同 login）。新的雜湊用現行的 PBKDF2 次數重算",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已改密碼，回傳新的登入權杖",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BAD_REQUEST：格式不對（新密碼要 8～128 字）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "INVALID_CREDENTIALS：目前密碼不對（登入權杖不受影響）；UNAUTHENTICATED：登入權杖無效或過期",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/AuthRateLimited"
+          }
+        }
+      }
+    },
+    "/api/auth/config": {
+      "get": {
+        "summary": "註冊設定（要不要邀請碼）",
+        "security": [],
+        "description": "不需要權杖；計入 /api 每分鐘 30 次",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfig"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    }
+  }
+}

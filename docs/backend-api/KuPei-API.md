@@ -1,0 +1,312 @@
+# KuPei 唯讀 API（給外部前端）
+
+給串接 KuPei 評分資料與行情的前端開發者。機器可讀版本是同資料夾的 `openapi.json`；串接規則與範圍見《2026-10-23_KuPei前端串接規範.md》；部署流程見《KuPei-前端部署指南-GitHub-Pages.md》；可直接使用的客戶端程式在 `starter/`（`kupei-client.ts`、`kupei-types.ts`）（OpenAPI 3.0，可匯入 Postman、openapi-typescript 等工具）。
+
+## 連線
+
+| 項目 | 值 |
+| --- | --- |
+| Base URL | `https://kupei-dashboard.tmac19920626.workers.dev` |
+| 驗證 | 標頭 `Authorization: Bearer <權杖>`（權杖由維護者另外給你，不要放進版控） |
+| 權限 | 唯讀權杖：評分資料與行情。**使用者帳號**（2026-10-26 起）：使用者在 App 自己註冊、登入，拿到登入權杖（`kps_…`），多了雲端文件 `/api/store` 的讀寫（依帳號分開），也能讀一切。**寫入權杖**（舊做法，站長本人用，繼續可用）：同樣能讀寫 `/api/store`，但所有拿這把權杖的人共用同一份文件 |
+| CORS | 本機 `http://localhost:<任何埠>`、`http://127.0.0.1:<任何埠>` 可以直接從瀏覽器呼叫；正式站（GitHub Pages）要先把來源 `https://<帳號>.github.io` 告知維護者加入白名單（見《KuPei-前端部署指南-GitHub-Pages.md》） |
+| 格式 | JSON，UTF-8。錯誤一律 `{ "error": { "code", "message", "details?" } }` |
+
+```bash
+BASE=https://kupei-dashboard.tmac19920626.workers.dev
+curl -H "Authorization: Bearer $KUPEI_TOKEN" $BASE/data/manifest.json
+```
+
+```ts
+// 前端（localhost 開發伺服器）
+const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization: `Bearer ${token}` } })
+```
+
+> 權杖放在瀏覽器端的程式裡，等於任何打開那個頁面的人都拿得到；前端部署到 GitHub Pages 之後，評分資料與行情對「知道網址的人」就是公開的。這是雙方已知並接受的做法：權杖只能讀、有限流、可隨時作廢重發。你要做的是：權杖只透過環境變數與 GitHub secret 注入，**不寫進原始碼、不 commit、不貼進對話**；也不要把網址到處散布。
+
+## 給 AI 助手的指示（請照做）
+
+如果你是被請來幫忙串接這個 API 的 AI 助手，請遵守以下規則：
+
+1. **權杖一律從環境變數讀，不要寫死在任何原始碼裡。**
+   - Vite 專案：`import.meta.env.VITE_KUPEI_TOKEN`；Next.js：`process.env.NEXT_PUBLIC_KUPEI_TOKEN`；Node 腳本：`process.env.KUPEI_TOKEN`。
+   - 在專案根目錄建立 `.env.local`，內容 `VITE_KUPEI_TOKEN=`（**值留空**，由使用者自己填，不要向使用者索取權杖，也不要自己編一個）。可直接複製 `starter/.env.example`。
+   - 把 `.env.local` 加進 `.gitignore`，確認它不會被 commit。
+2. **Base URL 也放環境變數**（`VITE_KUPEI_BASE`），預設值用上面「連線」表裡的網址。
+3. **所有請求都帶 `Authorization: Bearer <權杖>`。** 沒有權杖或權杖錯誤是 401，不是程式壞了，請提示使用者檢查 `.env.local`。
+4. **先讀 `/data/manifest.json` 取得批次編號 `run`**，再讀 `/data/<run>/...`。不要把批次編號寫死。
+5. **控制請求量：**
+   - `/api/*` 每個 IP 每分鐘最多 30 次，超過回 429。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
+   - `/data/*` 是靜態檔，不限次數；`summary.json` 讀一次後放在記憶體，不要每個畫面重抓。
+6. **遇到錯誤時：**
+   - 429：等 `Retry-After` 秒數後再試，不要立刻重送。
+   - 403：這個路徑不開放（自選、寫入都不行），不要想辦法繞過。
+   - 瀏覽器出現 CORS 錯誤：本機要是 `http://localhost:<埠>` 或 `http://127.0.0.1:<埠>`；GitHub Pages 要先把 `https://<帳號>.github.io` 給維護者加白名單。不要改用 `no-cors` 之類的方式硬解。
+7. **正式部署只到雙方約定的 GitHub Pages**（流程見《KuPei-前端部署指南-GitHub-Pages.md》），權杖用 GitHub Actions secret `VITE_KUPEI_TOKEN` 在建置時注入；不要把權杖貼進 issue、commit 訊息或對話。
+8. 目前沒有盤中即時價、新聞、個股報告，不要為它們做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
+9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.register()`／`kupei.auth.login()`（註冊畫面先呼叫 `kupei.auth.config()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。沒登入時 App 退回本機模式（只存 localStorage、顯示「未登入，只存在這台裝置」），不要報錯；評分與行情不需要登入。
+10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
+11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
+
+## 端點
+
+### 評分資料 `/data/*`（靜態 JSON）
+
+先讀 manifest 取得目前的批次編號 `run`，其餘檔案都在 `/data/<run>/` 底下。**批次資料夾發布後內容不變**，換批次只會改 manifest 的 `run`；所以 manifest 每次都要重新讀，批次內的檔案可以放心快取。
+
+| 路徑 | 內容 |
+| --- | --- |
+| `GET /data/manifest.json` | `run`（批次編號）、`published_at`、`details`（有明細的代號清單）、`hashes`（各批次檔的內容雜湊，見下）、`status_notes` |
+| `GET /data/<run>/summary.json` | `head`（期別、規格版本、母體、筆數）、`majors`（12 個大項）、`rows`（全部公司，緊湊陣列） |
+| `GET /data/<run>/details/<代號>.json` | 單一公司的分數樹，最多三層。只有 manifest 的 `details` 列出的代號才有 |
+| `GET /data/<run>/nodes.json` | 節點 id → 英文名稱（字串）。批次交付的若是 id → 字串，直接用交付版 |
+| `GET /data/<run>/tr.json` | 原因碼 → 中文 |
+| `GET /data/<run>/vparams.json` | 估價參數表 |
+| `GET /data/<run>/help.json` | **可選**。說明頁定義，任意 JSON（形狀由批次交付方決定） |
+| `GET /data/<run>/valuation.json` | **可選**。估價，JSON 物件，原樣發布（後端不計算、不檢查內部形狀） |
+| `GET /data/<run>/node_info.json` | **可選**。節點 id → 完整定義物件（批次交付的節點是物件形時才有；英文名仍在 `nodes.json`） |
+
+回應帶 `ETag`，請求時可用 `If-None-Match` 換 304。
+
+**`manifest.hashes`：四個固定鍵＋可選鍵。**
+
+- 固定鍵 `summary`、`vparams`、`tr`、`nodes` **永遠在**，對應的檔案一定存在。
+- 可選鍵 `help`、`valuation`、`node_info`：該批次有交付對應檔案才有。**沒有這個鍵＝檔案不存在**（請求會 404），不要打。
+- 每個鍵的值是該檔的內容雜湊，請求時帶 `?v=<雜湊>`（例如 `/data/<run>/valuation.json?v=<manifest.hashes.valuation>`），可長期快取（見「快取與載入」）。
+- 之後可能再加鍵；不認得的鍵忽略即可。
+- `starter/kupei-client.ts` 已包好：`loadHelp()`、`loadValuation()`、`loadNodeInfo()` 沒有鍵回 `null`（不打網路），有就抓一次、同一個批次之後回記憶體，換批次才重抓。
+
+**批次可帶的額外欄位。** 評分批次可以在既有的檔案裡多帶欄位，後端**原樣保留**、不檢查形狀；沒交付就沒有這些鍵，前端用之前自己檢查型別、缺了要能正常顯示：
+
+- `summary.json` 的頂層鍵（例如 `company_meta`：公司層級的額外資料）。
+- 明細樹 `details/<代號>.json` 每個 TreeNode 的新鍵（例如 `goal`、`definition`、`peer_rank`）。
+- **`summary.rows` 不會加欄位**：每列固定 11 欄、大項格固定 8 欄（順序見下）。新的公司層級資料一律放 `company_meta`，節點層級的放 TreeNode 新鍵。
+
+**`summary.rows` 每列是一個陣列**（欄位順序固定）：
+
+```
+[代號, 名稱, 產業, 金融業(0|1), 總名次|null, 政策分大項數|null, 大項[12], 否決(0|1), 否決來源[], 財務複核(0|1), 複核來源[]]
+```
+
+大項的每一格也是陣列：
+
+```
+[分數|null, 標記字, 大項名次|null, 是否政策分(0|1), 是否含政策分成分(0|1), 狀態, 下層觸發數, own]
+```
+
+- 大項順序與 `majors` 相同。
+- `狀態` 只有 `TRIAL_SCORE`、`POLICY_SCORE` 且分數非 null 才算有分數；其餘（`UNAVAILABLE`、`NOT_APPLICABLE`、`OUT_OF_SCOPE_FINANCIAL`…）都沒有。
+- 總名次為 `null` ＝ NR（不排名）。排名母體以 `head.rank_population`（各大項各一個）為準，由評分批次交付、後端不重算。
+- 完整型別與排序、底色規則見文末附錄。
+
+### 行情 `/api/market/*`
+
+只有**每日收盤**（非即時），來源是證交所、櫃買中心與公開資訊觀測站的公開資料。
+
+| 路徑 | 說明 |
+| --- | --- |
+| `GET /api/market/latest` | `{ dates: { L, O }, quotes: { "<代號>": [收盤, 漲跌價差, 成交股數] } }`。`L` 上市、`O` 上櫃，各市場最新交易日。`收盤` 為 `null` ＝當日無成交 |
+| `GET /api/market/history?codes=2330,2454` | `{ quotes: { "<代號>": [[日期, 收盤, 成交股數], …] }, revenue: { "<代號>": [[年月, 營收(千元), 年增率%], …] } }`。近 20 個交易日、近 5 個月，舊→新。`codes` 要 1～30 個 4 碼代號，任何一個不合法就整個 400（不會默默丟掉壞的） |
+| `GET /api/market/status` | `{ counts: { quoteDays, firstDay, lastDay, revenueMonths, firstMonth, lastMonth }, runs: [最近 12 次抓取] }`，看資料新不新用 |
+
+- 漲跌幅 ＝ `漲跌價差 ÷ (收盤 − 漲跌價差)`。
+- 只有 4 碼代號；評分名單 1,976 家中有 10 家找不到行情（1516、2067、3625、3632、4155、4804、6142、6167、6173、8047）。
+- 盤中即時價、新聞、個股報告**還沒有**。估價不在行情這裡，是評分批次的可選檔 `valuation.json`（見上）。
+
+### 帳號 `/api/auth/*`（不需要權杖）
+
+使用者在 App 裡自己註冊帳號；登入後雲端文件（`/api/store`）依帳號分開存。評分資料與行情的讀取不變（唯讀權杖，不需要登入）。
+
+| 方法 | 路徑 | 請求 | 回應 |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/config` | — | `{ inviteRequired: boolean }`：註冊要不要邀請碼（不回傳邀請碼本身） |
+| `POST` | `/api/auth/register` | `{ "username", "password", "inviteCode"? }` | **201** `{ user: { id, username }, token, expiresAt }`（註冊完直接是登入狀態） |
+| `POST` | `/api/auth/login` | `{ "username", "password" }` | 200，格式同上 |
+| `POST` | `/api/auth/logout` | 標頭 `Authorization: Bearer <登入權杖>` | `{ ok: true }`，這個權杖立刻失效（其他裝置的登入不受影響） |
+| `GET` | `/api/auth/me` | 標頭 `Authorization: Bearer <登入權杖>` | `{ user: { id, username } }` |
+| `POST` | `/api/auth/password` | 標頭 `Authorization: Bearer <登入權杖>`，本文 `{ "currentPassword", "newPassword" }` | 200，格式同 login（**新的**登入權杖） |
+
+- **帳號**：不分大小寫（一律轉小寫存），3～32 字，只能用英文字母、數字與 `_` `.` `-`，開頭要是英數。**密碼** 8～128 字（區分大小寫，前後空白也算）。
+- **登入權杖**：`kps_` 開頭的 47 字元字串，有效 **30 天**（`expiresAt`，ISO 8601 UTC），到期要重新登入（沒有自動續期）。之後所有請求用 `Authorization: Bearer <登入權杖>`：能讀評分資料與行情（同唯讀權杖），加上 `/api/store`。同一個帳號可以在多台裝置各自登入。
+- **權杖存放**：`starter/kupei-client.ts` 存在 `localStorage` 的 `kupei:session`（`{ token, username, expiresAt }`）。伺服器只存權杖的 SHA-256，看不到原本的權杖；密碼以 PBKDF2-SHA256 加鹽雜湊。
+- **與寫入權杖的關係**：寫入權杖的文件 owner 是共用的 `kupei`，每個帳號是自己的 `u:<id>`，**彼此看不到**（帳號登入後看不到寫入權杖存的那份，反之亦然；要搬資料由前端讀出再寫進去）。站長的自選（`/api/watchlist`）兩者都碰不到。
+- **邀請碼**（2026-10-26 新增）：維護者可以把「註冊需要邀請碼」打開。打開時 `register` 要帶 `inviteCode`，沒帶 403 `INVITE_REQUIRED`、不對 403 `INVITE_INVALID`；關閉時這個欄位被忽略（帶了也沒關係）。註冊畫面打開時先呼叫 `GET /api/auth/config`，`inviteRequired` 為 `true` 才顯示邀請碼欄位。邀請碼本身不會從任何公開端點回傳，由維護者另外給使用者。
+- **改密碼**（2026-10-26 新增）：`POST /api/auth/password`，新密碼規則同註冊（8～128 字）。目前密碼錯 401 `INVALID_CREDENTIALS`（登入權杖不受影響，不要因此把使用者登出）。成功後**這個帳號所有裝置的登入權杖都失效**（包含這台的舊權杖），回應裡是這台的新權杖（30 天）——要立刻換掉存著的權杖；別台裝置下一個請求會收到 401 `UNAUTHENTICATED`，回到未登入。
+- **限流**：註冊＋登入＋改密碼合計每個 IP 每分鐘 **10 次**，超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
+- 不需要 `X-Requested-With`；CORS 與其他端點相同（預檢允許 `POST`）。
+- **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
+- **帳號被停用**：維護者可以停用帳號（所有裝置立刻登出、之後登入一律 401 `INVALID_CREDENTIALS`；雲端文件保留，恢復後照舊）。
+- **目前沒有**：忘記密碼、刪除帳號、Email 驗證。忘記密碼只能請維護者處理。
+
+```ts
+const { inviteRequired } = await kupei.auth.config()      // true → 註冊畫面多一個邀請碼欄位
+await kupei.auth.register('coku', 'my-long-password', inviteCode)   // 或 kupei.auth.login(...)；成功回 { user }
+kupei.getSession()                                      // { username: 'coku', expiresAt: '…' } | null
+await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))
+await kupei.auth.changePassword('my-long-password', 'new-long-password')   // 其他裝置全部登出，這台自動換新權杖
+await kupei.auth.logout()
+```
+
+### 雲端文件 `/api/store/*`（寫入，需登入或寫入權杖）
+
+前端改的任何資料——自選群組、個股問題、新聞設定、報告排程設定——整包 JSON 存到雲端，換裝置就同步。後端**不認識內容**：每個 key 一份文件，形狀由前端決定，要存新東西不必改後端。
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `GET` | `/api/store` | `{ docs: [{ key, version, updatedAt, bytes }] }` 所有文件（不含內容） |
+| `GET` | `/api/store/<key>` | `{ key, version, updatedAt, data }`；沒有時 `version: 0, data: null` |
+| `PUT` | `/api/store/<key>` | 內容 `{ baseVersion, data }`。`baseVersion` 要等於目前版本（第一次 0）→ `{ key, version, updatedAt }`；不符 **409** `VERSION_CONFLICT`，`error.details` 是雲端最新的整份文件 |
+| `DELETE` | `/api/store/<key>?baseVersion=N` | 版本相符才刪 → `{ ok: true }`；不符 409、不存在 404 |
+
+- `key`：小寫英數與連字號，1～40 字，開頭英數（例如 `watchlist`、`stock-questions`、`news-settings`、`report-schedule`）。
+- `data`：任意 JSON，序列化後最多 **256 KB**（超過 413 `TOO_LARGE`）。
+- **樂觀鎖**：每次寫入版本 +1。兩台裝置同時改，後送的會收到 409 和最新內容，載入後重做。`starter/kupei-client.ts` 的 `store.update(key, fn)` 已包好「讀→改→寫、撞到就用最新重做」。
+- 回應一律 `no-store`；每個 IP 每分鐘 60 次。
+- 後端只負責**存**：報告排程存的是設定，**後端不會跑報告**；新聞設定同理。
+- 唯讀權杖打這些路徑一律 403。用登入權杖時，文件屬於該帳號，別的帳號看不到。
+
+**寫入權杖怎麼用**（站長本人用；一般使用者請用帳號）：它不是建置時注入的環境變數——那樣會跟網頁一起公開。做法是 App 提供一個設定畫面讓使用者貼上，`kupei.setWriteToken(token)` 會存在該裝置的 `localStorage`（key `kupei:write-token`），之後所有請求自動改用它。清除就 `setWriteToken(null)`。
+
+### 健康檢查
+
+`GET /api/health` → `{ "ok": true }`。不需要權杖，確認服務在不在線。
+
+## 錯誤
+
+| HTTP | `error.code` | 意思 |
+| --- | --- | --- |
+| 400 | `BAD_REQUEST` | 參數不對（例如 `codes` 不是 1～30 個 4 碼代號） |
+| 401 | `UNAUTHENTICATED` | 權杖不對，或登入權杖過期／已登出（JSON）。完全沒帶 `Authorization` 時，`/data/*` 回純文字 `Unauthorized` |
+| 401 | `INVALID_CREDENTIALS` | 登入時帳號不存在或密碼錯（含被停用的帳號）；改密碼時目前密碼不對 |
+| 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
+| 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
+| 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
+| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
+| 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
+| 413 | `TOO_LARGE` | 文件超過 256 KB |
+| 429 | `RATE_LIMITED` | `/api/market/*` 每個 IP 每分鐘 30 次、`/api/store/*` 60 次、註冊＋登入＋改密碼 10 次，超過會帶 `Retry-After: 30`。`/data/*` 靜態檔不受限 |
+| 404 | `NOT_FOUND` | 刪除不存在的文件（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
+
+> 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。
+
+## 快取與載入（2026-10-25 實測後的建議；`starter/kupei-client.ts` 已照做）
+
+實測線上：`summary.json` 原始 1 MB、壓縮後約 170 KB（Cloudflare 自動 gzip／brotli，不用自己處理）；每一趟請求往返約 0.3–0.6 秒，冷啟動可到 2–3 秒。所以瓶頸是**往返次數**，不是檔案大小。
+
+| 規則 | 做法 | 效果 |
+| --- | --- | --- |
+| 批次檔網址帶版本 | `/data/<run>/summary.json?v=<manifest.hashes.summary>`，可選檔同理（`help`、`valuation`、`node_info`）；`details/*.json` 用 `?v=<published_at>` | 伺服器回 `max-age=31536000, immutable`，**第二次打開完全不碰網路** |
+| `manifest.json` 永遠重新驗證 | 它是換批次的唯一訊號，`cache: 'no-cache'`（1 KB，用 ETag 換 304） | 換批次一定看得到 |
+| 先用上次的批次 | 把 manifest 記在 `localStorage`；下次打開先從快取還原畫面，同時在背景核對 manifest，換了才重載 | 回訪的首次渲染不等任何往返 |
+| 評分與行情同時起跑 | app 啟動就呼叫 `preload()`，兩條互不等待 | 少一趟串行 |
+| `latest` 不重複 | 伺服器 `max-age=60`＋ETag；客戶端 60 秒內共用同一份、進行中的請求共用 | 多個元件同時要行情也只有 1 次請求 |
+| `history` 合併 | 同一個 tick 內的呼叫合併成一次、每次最多 30 檔、已載過的不重抓；伺服器 `max-age=300` | 列表畫面要幾十家只打 1 次 |
+| 429 自動退避 | 依 `Retry-After` 等待後重試一次 | 偶發限流不會直接壞畫面 |
+| 逾時 | 每個請求 20 秒 | 不會無限等 |
+
+不帶 `?v=` 的批次檔請求仍回 `no-cache`（每次驗證），能用但慢；**請一律帶版本**。
+
+## 開發建議
+
+- **先讀 manifest，再讀批次檔。** 不要把批次編號寫死在程式裡。
+- **`summary.json` 約 1,976 列、檔案不小**，讀一次放在記憶體或 IndexedDB，不要每個畫面重抓。
+- **行情用批次的方式取。** `history` 一次最多 30 檔，不要逐檔打。`/api/*` 每分鐘 30 次，不要放在輪詢或會重複觸發的地方。
+- **`/api/market/latest` 伺服器快取 60 秒、瀏覽器 `max-age=60`＋ETag**，行情一天只更新幾次，不需要更頻繁地問。
+- **評分資料（`/data/*`）不限次數、不花後端額度**，可以放心讀；盡量把 `summary.json` 留在記憶體。
+- **看資料新不新：** 評分看 `summary.head.as_of`、行情看 `/api/market/latest` 的 `dates`。
+- 排序與底色規則照文末附錄，免得跟本站的畫面對不上。
+
+---
+
+## 附錄 A：資料型別（TypeScript）
+
+```ts
+// /data/manifest.json
+interface Manifest {
+  run: string
+  published_at: string
+  source_file: string
+  details: string[] // 有明細的公司代號
+  hashes: ManifestHashes
+  status_notes: { translations: string; spec_current: string; sources: string[] }
+}
+
+// 四個固定鍵永遠在；可選鍵只有該批次交付了對應檔案才有（沒有＝檔案不存在）
+interface ManifestHashes {
+  summary: string
+  vparams: string
+  tr: string
+  nodes: string
+  help?: string        // → /data/<run>/help.json
+  valuation?: string   // → /data/<run>/valuation.json
+  node_info?: string   // → /data/<run>/node_info.json
+  [key: string]: string | undefined // 之後可能新增
+}
+
+// /data/<run>/summary.json
+interface Summary {
+  head: {
+    requested_period: string
+    annual_period: string
+    spec_version: string
+    as_of: string
+    source_run: string
+    rank_population: number[] // 各大項的排名母體（由批次交付，後端不重算）
+    counts: { records: number; ranked: number; NR: number; veto: number; fin_review: number }
+    gate_overlay: { execution_mode: string; production_enabled: boolean; source: string; policy: string }
+  }
+  majors: { id: string; en: string; zh: string; goal: string }[] // 12 項
+  rows: Row[]            // 每列固定 11 欄，不會加欄
+  company_meta?: unknown // 可選：公司層級的額外資料，形狀由批次交付方決定
+  [key: string]: unknown // 批次可能帶的其他頂層鍵，原樣保留
+}
+
+type ScoreStatus =
+  | 'TRIAL_SCORE' | 'POLICY_SCORE'                       // 只有這兩種且分數非 null 才算有分數
+  | 'UNAVAILABLE' | 'NOT_APPLICABLE' | 'OUT_OF_SCOPE_FINANCIAL' | 'CONFIGURATION_PENDING'
+  | 'NOT_ENABLED' | 'SCOPE_UNVERIFIED' | 'NOT_ANNUAL_PERIOD' | 'DIAGNOSTIC'
+  | 'ADJUSTMENT' | 'ADJUSTMENT_NOT_EVALUATED' | 'MISSING_ROW'
+  | (string & {})                                          // 之後可能新增
+
+// [分數, 標記字, 大項名次, 是否政策分, 是否含政策分成分, 狀態, 下層觸發數, own]
+type MajorCell = [number | null, string, number | null, 0 | 1, 0 | 1, ScoreStatus, number, number]
+
+// [代號, 名稱, 產業, 金融業, 總名次, 政策分大項數, 大項[12], 否決, 否決來源[], 財務複核, 複核來源[]]
+type Row = [string, string, string, 0 | 1, number | null, number | null, MajorCell[], 0 | 1, string[], 0 | 1, string[]]
+
+// /data/<run>/details/<代號>.json 是 TreeNode[]（第一層是 12 個大項，最多三層）
+interface TreeNode {
+  id: string
+  en: string
+  zh: string
+  w: number | null      // 在上層的權重
+  p: string             // 期別
+  s: number | null      // 分數
+  st: ScoreStatus
+  r: string[]           // 原因碼，中文對照在 tr.json
+  src: GateNote[]
+  below: number         // 下層觸發數
+  rd: GateNote[]        // Gate 規則列
+  c: TreeNode[]         // 子節點
+  mr?: number | null    // 只有第一層有：大項名次
+  [key: string]: unknown // 批次可帶的額外欄位（例如 goal、definition、peer_rank），原樣保留
+}
+type GateNote = [string, string, string, string, string, string, string, number, string, string]
+
+// 可選批次檔：內部形狀由評分批次交付方決定，後端原樣發布、不檢查
+type HelpDoc = unknown                                   // /data/<run>/help.json
+type Valuation = Record<string, unknown>                 // /data/<run>/valuation.json
+type NodeInfo = Record<string, Record<string, unknown>>  // /data/<run>/node_info.json：節點 id → 定義物件
+```
+
+## 附錄 B：排序與底色規則（與本站畫面一致）
+
+- **母體：** 排除金融保險業（`row[3] === 1`）。
+- **預設排序：** 依總名次（`row[4]`），NR（`null`）排最後，NR 之間依代號。
+- **依大項排序：** 只有狀態是 `TRIAL_SCORE` 或 `POLICY_SCORE` 且分數非 null 才算有值，沒有值的排最後；同分依總名次，再依代號。
+- **欄頭點擊循環：** 高→低、低→高、回總名次。
+- **依成交價排序：** 用 `/api/market/latest` 的最新收盤價；沒有價格（找不到行情、當日無成交）的排最後。
+- **大項分數格底色：** `rgba(58,128,228, 0.08 + 0.52 × 名次百分位)`，名次百分位 ＝ `1 − (名次 − 1) ÷ (母體 − 1)`，母體取 `head.rank_population[大項索引]`；沒有名次時退回用分數（30～100 拉開）。名次在前 10% 加粗。
+- **漲跌幅：** `漲跌價差 ÷ (收盤 − 漲跌價差)`；漲紅、跌綠、平盤灰。
+- **股價格式：** 1,000 以上的整數不帶小數、非整數一位；1,000 以下兩位。
+- 估價（中心、安全邊際、上下限…）只在批次有 `valuation.json`（`loadValuation()` 不是 `null`）時顯示；沒有就不要顯示空欄位。
