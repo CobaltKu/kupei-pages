@@ -36,11 +36,11 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 3. **所有請求都帶 `Authorization: Bearer <權杖>`。** 沒有權杖或權杖錯誤是 401，不是程式壞了，請提示使用者檢查 `.env.local`。
 4. **先讀 `/data/manifest.json` 取得批次編號 `run`**，再讀 `/data/<run>/...`。不要把批次編號寫死。
 5. **控制請求量：**
-   - `/api/*` 每個 IP 每分鐘最多 30 次，超過回 429。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
+   - `/api/market/*` 每個 IP 每分鐘最多 30 次、`/api/store*` 60 次、註冊＋登入＋改密碼 10 次，超過回 429。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
    - `/data/*` 是靜態檔，不限次數；`summary.json` 讀一次後放在記憶體，不要每個畫面重抓。
 6. **遇到錯誤時：**
    - 429：等 `Retry-After` 秒數後再試，不要立刻重送。
-   - 403：這個路徑不開放（自選、寫入都不行），不要想辦法繞過。
+   - 403 `FORBIDDEN`：這個權杖不能用這個路徑（唯讀權杖打 `/api/store`、任何權杖打站長的 `/api/watchlist` 等），不要想辦法繞過。403 `QUOTA_EXCEEDED`：雲端文件額度滿了，提示使用者，不要自動重試。
    - 瀏覽器出現 CORS 錯誤：本機要是 `http://localhost:<埠>` 或 `http://127.0.0.1:<埠>`；GitHub Pages 要先把 `https://<帳號>.github.io` 給維護者加白名單。不要改用 `no-cors` 之類的方式硬解。
 7. **正式部署只到雙方約定的 GitHub Pages**（流程見《KuPei-前端部署指南-GitHub-Pages.md》），權杖用 GitHub Actions secret `VITE_KUPEI_TOKEN` 在建置時注入；不要把權杖貼進 issue、commit 訊息或對話。
 8. 目前沒有盤中即時價、新聞、個股報告，不要為它們做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
@@ -156,10 +156,11 @@ await kupei.auth.logout()
 | `GET` | `/api/store` | `{ docs: [{ key, version, updatedAt, bytes }] }` 所有文件（不含內容） |
 | `GET` | `/api/store/<key>` | `{ key, version, updatedAt, data }`；沒有時 `version: 0, data: null` |
 | `PUT` | `/api/store/<key>` | 內容 `{ baseVersion, data }`。`baseVersion` 要等於目前版本（第一次 0）→ `{ key, version, updatedAt }`；不符 **409** `VERSION_CONFLICT`，`error.details` 是雲端最新的整份文件 |
-| `DELETE` | `/api/store/<key>?baseVersion=N` | 版本相符才刪 → `{ ok: true }`；不符 409、不存在 404 |
+| `DELETE` | `/api/store/<key>?baseVersion=N` | `N` 是 ≥ 1 的整數（缺少或不合法 400）。版本相符才刪 → `{ ok: true }`；不符 409（`details` 是最新文件）、不存在 404 |
 
 - `key`：小寫英數與連字號，1～40 字，開頭英數（例如 `watchlist`、`stock-questions`、`news-settings`、`report-schedule`）。
-- `data`：任意 JSON，序列化後最多 **256 KB**（超過 413 `TOO_LARGE`）；整個請求本文最多 300 KB（超過也是 413 `TOO_LARGE`）。
+- `data`：任意 JSON，序列化後最多 **256 KB**（超過 413 `TOO_LARGE`）；整個請求本文最多 300 KB（超過也是 413 `TOO_LARGE`）。`data: null` 也會存成一份（版本照樣 +1、讀回 `data: null` 但 `version` > 0）；要清掉請用 `DELETE`。
+- 列表的 `bytes`：目前是 `data` JSON 字串的**字元數**（不是 UTF-8 位元組，中文內容會比實際位元組小）；額度（2 MB）以 UTF-8 位元組計，請不要拿 `bytes` 加總來判斷離上限還多遠，以 `QUOTA_EXCEEDED` 的 `details.bytes` 為準。
 - **每個帳號的上限**（2026-10-27 新增）：最多 **50 份**文件、所有文件合計 **2 MB**（UTF-8 位元組；覆寫時以改完後的總量算，改小一定可以）。超過回 **403** `QUOTA_EXCEEDED`，`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`（目前用量）——請提示使用者刪掉不用的文件，不要自動重試。寫入權杖的那份也適用。
 - **樂觀鎖**：每次寫入版本 +1。兩台裝置同時改，後送的會收到 409 和最新內容，載入後重做。`starter/kupei-client.ts` 的 `store.update(key, fn)` 已包好「讀→改→寫、撞到就用最新重做」。
 - 回應一律 `no-store`；每個 IP 每分鐘 60 次。
@@ -177,7 +178,7 @@ await kupei.auth.logout()
 | HTTP | `error.code` | 意思 |
 | --- | --- | --- |
 | 400 | `BAD_REQUEST` | 參數不對（例如 `codes` 不是 1～30 個 4 碼代號） |
-| 401 | `UNAUTHENTICATED` | 權杖不對，或登入權杖過期／已登出（JSON）。完全沒帶 `Authorization` 時，`/data/*` 回純文字 `Unauthorized` |
+| 401 | `UNAUTHENTICATED` | 權杖不對，或登入權杖過期／已登出（JSON，帶 CORS）。完全沒帶 `Authorization` 時，`/data/*` 回純文字 `Unauthorized`、`/api/*` 回 JSON 401，兩者都**不帶 CORS 標頭**（瀏覽器跨來源只會看到 CORS 錯誤） |
 | 401 | `INVALID_CREDENTIALS` | 登入時帳號不存在或密碼錯（含被停用的帳號）；改密碼時目前密碼不對 |
 | 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
@@ -186,10 +187,10 @@ await kupei.auth.logout()
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
 | 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }` |
 | 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過 300 KB |
-| 429 | `RATE_LIMITED` | `/api/market/*` 每個 IP 每分鐘 30 次、`/api/store/*` 60 次、註冊＋登入＋改密碼 10 次（登入另外每個帳號 10 次），IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`。`/data/*` 靜態檔不受限 |
+| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼 10 次（登入另外每個帳號 10 次）。IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
 | 404 | `NOT_FOUND` | 刪除不存在的文件（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 
-> 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。
+> 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`）、`/api/*` 請求沒帶 `Authorization`、送了不允許的請求標頭（預檢只允許 `Authorization`、`Content-Type`、`If-None-Match`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。回應沒有 `Access-Control-Expose-Headers`，所以跨來源的 JS 讀不到 `Retry-After`、`ETag` 等非基本標頭（瀏覽器自己的快取驗證不受影響）。
 
 ## 快取與載入（2026-10-25 實測後的建議；`starter/kupei-client.ts` 已照做）
 

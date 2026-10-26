@@ -317,7 +317,7 @@ function qtStream(){
   QT.es.onerror=function(){QT.fails++;if(QT.fails>=3){try{QT.es.close();}catch(x){}QT.es=null;qtPoll();}};
 }
 function qtSame(s){return QT.on&&s&&s.last_success_at===QT.last&&s.trading_date===QT.tdate&&(s.seq||0)===QT.seq&&s.quotes===QT.map;}
-function qtStart(){KupeiAPI.req('GET','/quotes').then(function(r){if(!r.ok){QT.on=false;updLine();return;}if(!qtSame(r.data)){qtApply(r.data);quotesChanged();}else updLine();if(PAGES)qtPoll();else qtStream();},function(){updLine();});}
+function qtStart(){KupeiAPI.req('GET','/quotes').then(function(r){if(!r.ok){QT.on=false;updLine();return;}if(!qtSame(r.data)){qtApply(r.data);quotesChanged();}else updLine();if(!PAGES)qtStream(); /* Pages 版：行情一天只更新幾次，不輪詢（串接規範 §4），回到分頁時才刷新 */},function(){updLine();});}
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&QT.on)qtRefresh();});
 function vaStart(){KupeiAPI.req('GET','/valuation').then(function(r){if(!r.ok)return;QT.v++;VAL.on=true;VAL.date=r.data.valuation_date;VAL.map=r.data.companies||{};VAL.limitations=r.data.dataset_limitations||[];Object.keys(r.data.translations||{}).forEach(function(k){TR[k]=r.data.translations[k];});quotesChanged(true);});}
 function hm(iso){if(!iso)return '—';var d=new Date(iso);return isNaN(d)?'—':hhmm(d);}

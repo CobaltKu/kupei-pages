@@ -357,7 +357,8 @@ const pullAll = () => serial(async (): Promise<boolean> => {
     if (cloud.version === 0 || !cloud.data) {
       if (local != null) {
         // 第一次同步（owner 未知）或這個帳號雲端被清空：本機資料帶上去
-        const r = await client.store.put(dk, { savedAt: new Date().toISOString(), value: local } as CloudDoc, 0)
+        // 雲端被 PUT null 清空時版本不是 0，baseVersion 要帶雲端目前的版本，否則必定 409
+        const r = await client.store.put(dk, { savedAt: new Date().toISOString(), value: local } as CloudDoc, cloud.version)
         meta.versions[dk] = r.version
         meta.dirty[lk] = false
       } else meta.versions[dk] = 0
@@ -433,8 +434,11 @@ const pushDirty = () => serial(async () => {
   } catch (e) {
     if (frozen || syncUser() !== who) return
     writeMeta(meta)
-    setSyncMsg(e instanceof KupeiError && e.status === 413 ? '同步失敗：資料太大（單份上限 256 KB）' : '同步失敗，稍後會再試')
     window.clearTimeout(pushTimer)
+    // 太大、超過額度：重試也不會成功（串接規範 §3），只提示，等使用者下次修改再推
+    if (e instanceof KupeiError && e.status === 413) return setSyncMsg('同步失敗：資料太大（單份上限 256 KB），請減少內容')
+    if (e instanceof KupeiError && e.code === 'QUOTA_EXCEEDED') return setSyncMsg('同步失敗：雲端空間已滿（每人 50 份、2 MB），請刪除不用的資料')
+    setSyncMsg('同步失敗，稍後會再試')
     pushTimer = window.setTimeout(() => void pushDirty(), 30000)
   }
 })

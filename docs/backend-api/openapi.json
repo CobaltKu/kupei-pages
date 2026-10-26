@@ -49,7 +49,9 @@
                   "QUOTA_EXCEEDED",
                   "NOT_FOUND",
                   "INVALID_CREDENTIALS",
-                  "USERNAME_TAKEN"
+                  "USERNAME_TAKEN",
+                  "INVITE_REQUIRED",
+                  "INVITE_INVALID"
                 ]
               },
               "message": {
@@ -305,7 +307,8 @@
             "nullable": true
           },
           "bytes": {
-            "type": "integer"
+            "type": "integer",
+            "description": "data JSON 字串的字元數（目前實作不是 UTF-8 位元組；額度以 UTF-8 位元組計，以 QUOTA_EXCEEDED 的 details.bytes 為準）"
           }
         }
       },
@@ -342,7 +345,7 @@
             "description": "目前雲端版本；第一次 0"
           },
           "data": {
-            "description": "任意 JSON，序列化後 ≤ 256 KB"
+            "description": "任意 JSON，序列化後 ≤ 256 KB。null 也會存成一份（version 照樣 +1）；要清掉請用 DELETE"
           }
         }
       },
@@ -457,7 +460,7 @@
     },
     "responses": {
       "Unauthorized": {
-        "description": "沒帶權杖或權杖不對",
+        "description": "權杖不對（JSON，帶 CORS）。完全沒帶 Authorization 時 /data/* 回純文字 Unauthorized、/api/* 回 JSON，兩者都不帶 CORS 標頭",
         "content": {
           "application/json": {
             "schema": {
@@ -477,7 +480,7 @@
         }
       },
       "TooManyRequests": {
-        "description": "/api/* 每個 IP 每分鐘最多 30 次；回應帶 Retry-After: 30",
+        "description": "每個 IP 每分鐘最多 30 次（/api/market/*、/api/auth/logout、/api/auth/me、/api/auth/config 與其他帶權杖的 /api/* 合計）；回應帶 Retry-After: 30（跨來源讀不到，請預設 30 秒）",
         "headers": {
           "Retry-After": {
             "schema": {
@@ -529,6 +532,23 @@
             }
           }
         }
+      },
+      "StoreRateLimited": {
+        "description": "/api/store 與 /api/store/{key} 每個 IP 每分鐘最多 60 次；回應帶 Retry-After: 30（跨來源讀不到，請預設 30 秒）",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     },
     "parameters": {
@@ -549,7 +569,7 @@
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
         },
-        "description": "小寫英數與連字號，1～40 字"
+        "description": "小寫英數與連字號，1～40 字，開頭英數"
       }
     }
   },
@@ -883,6 +903,9 @@
               }
             }
           },
+          "304": {
+            "description": "If-None-Match 與目前的 ETag 相同（弱 ETag：各市場最新日期＋家數）"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -989,7 +1012,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "429": {
-            "$ref": "#/components/responses/TooManyRequests"
+            "$ref": "#/components/responses/StoreRateLimited"
           }
         },
         "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
@@ -1029,6 +1052,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/StoreRateLimited"
           }
         },
         "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
@@ -1109,7 +1135,7 @@
             }
           },
           "429": {
-            "$ref": "#/components/responses/TooManyRequests"
+            "$ref": "#/components/responses/StoreRateLimited"
           }
         },
         "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
@@ -1132,7 +1158,38 @@
         ],
         "responses": {
           "200": {
-            "description": "已刪除"
+            "description": "已刪除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "baseVersion 缺少或不是 ≥ 1 的整數，或 key 格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "404": {
             "description": "沒有這份文件",
@@ -1147,11 +1204,8 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
+          "429": {
+            "$ref": "#/components/responses/StoreRateLimited"
           }
         },
         "description": "用登入權杖時文件屬於該帳號（owner u:<id>），別的帳號與寫入權杖都看不到；寫入權杖共用 owner kupei"
@@ -1192,6 +1246,16 @@
               }
             }
           },
+          "403": {
+            "description": "INVITE_REQUIRED：註冊需要邀請碼但沒填；INVITE_INVALID：邀請碼不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
             "description": "USERNAME_TAKEN：帳號已被使用",
             "content": {
@@ -1204,16 +1268,6 @@
           },
           "429": {
             "$ref": "#/components/responses/AuthRateLimited"
-          },
-          "403": {
-            "description": "INVITE_REQUIRED：註冊需要邀請碼但沒填；INVITE_INVALID：邀請碼不對",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
           }
         }
       }
