@@ -46,6 +46,7 @@
                   "RATE_LIMITED",
                   "VERSION_CONFLICT",
                   "TOO_LARGE",
+                  "QUOTA_EXCEEDED",
                   "NOT_FOUND",
                   "INVALID_CREDENTIALS",
                   "USERNAME_TAKEN"
@@ -1085,13 +1086,20 @@
             "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
-            "$ref": "#/components/responses/Forbidden"
+            "description": "權杖不能用雲端文件（FORBIDDEN），或超過每個 owner 的上限：50 份、合計 2 MB（QUOTA_EXCEEDED，details 為 { docs, bytes, maxDocs, maxBytes }）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "413": {
-            "description": "超過 256 KB",
+            "description": "data 超過 256 KB，或請求本文超過 300 KB（先看 Content-Length）",
             "content": {
               "application/json": {
                 "schema": {

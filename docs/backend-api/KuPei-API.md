@@ -132,7 +132,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 - **與寫入權杖的關係**：寫入權杖的文件 owner 是共用的 `kupei`，每個帳號是自己的 `u:<id>`，**彼此看不到**（帳號登入後看不到寫入權杖存的那份，反之亦然；要搬資料由前端讀出再寫進去）。站長的自選（`/api/watchlist`）兩者都碰不到。
 - **邀請碼**（2026-10-26 新增）：維護者可以把「註冊需要邀請碼」打開。打開時 `register` 要帶 `inviteCode`，沒帶 403 `INVITE_REQUIRED`、不對 403 `INVITE_INVALID`；關閉時這個欄位被忽略（帶了也沒關係）。註冊畫面打開時先呼叫 `GET /api/auth/config`，`inviteRequired` 為 `true` 才顯示邀請碼欄位。邀請碼本身不會從任何公開端點回傳，由維護者另外給使用者。
 - **改密碼**（2026-10-26 新增）：`POST /api/auth/password`，新密碼規則同註冊（8～128 字）。目前密碼錯 401 `INVALID_CREDENTIALS`（登入權杖不受影響，不要因此把使用者登出）。成功後**這個帳號所有裝置的登入權杖都失效**（包含這台的舊權杖），回應裡是這台的新權杖（30 天）——要立刻換掉存著的權杖；別台裝置下一個請求會收到 401 `UNAUTHENTICATED`，回到未登入。
-- **限流**：註冊＋登入＋改密碼合計每個 IP 每分鐘 **10 次**，超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
+- **限流**：註冊＋登入＋改密碼合計每個 IP 每分鐘 **10 次**（IPv6 以 /64 為一組）；登入另外每個帳號每分鐘 **10 次**（不分 IP），超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
 - 不需要 `X-Requested-With`；CORS 與其他端點相同（預檢允許 `POST`）。
 - **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
 - **帳號被停用**：維護者可以停用帳號（所有裝置立刻登出、之後登入一律 401 `INVALID_CREDENTIALS`；雲端文件保留，恢復後照舊）。
@@ -159,7 +159,8 @@ await kupei.auth.logout()
 | `DELETE` | `/api/store/<key>?baseVersion=N` | 版本相符才刪 → `{ ok: true }`；不符 409、不存在 404 |
 
 - `key`：小寫英數與連字號，1～40 字，開頭英數（例如 `watchlist`、`stock-questions`、`news-settings`、`report-schedule`）。
-- `data`：任意 JSON，序列化後最多 **256 KB**（超過 413 `TOO_LARGE`）。
+- `data`：任意 JSON，序列化後最多 **256 KB**（超過 413 `TOO_LARGE`）；整個請求本文最多 300 KB（超過也是 413 `TOO_LARGE`）。
+- **每個帳號的上限**（2026-10-27 新增）：最多 **50 份**文件、所有文件合計 **2 MB**（UTF-8 位元組；覆寫時以改完後的總量算，改小一定可以）。超過回 **403** `QUOTA_EXCEEDED`，`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`（目前用量）——請提示使用者刪掉不用的文件，不要自動重試。寫入權杖的那份也適用。
 - **樂觀鎖**：每次寫入版本 +1。兩台裝置同時改，後送的會收到 409 和最新內容，載入後重做。`starter/kupei-client.ts` 的 `store.update(key, fn)` 已包好「讀→改→寫、撞到就用最新重做」。
 - 回應一律 `no-store`；每個 IP 每分鐘 60 次。
 - 後端只負責**存**：報告排程存的是設定，**後端不會跑報告**；新聞設定同理。
@@ -183,8 +184,9 @@ await kupei.auth.logout()
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
 | 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
-| 413 | `TOO_LARGE` | 文件超過 256 KB |
-| 429 | `RATE_LIMITED` | `/api/market/*` 每個 IP 每分鐘 30 次、`/api/store/*` 60 次、註冊＋登入＋改密碼 10 次，超過會帶 `Retry-After: 30`。`/data/*` 靜態檔不受限 |
+| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }` |
+| 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過 300 KB |
+| 429 | `RATE_LIMITED` | `/api/market/*` 每個 IP 每分鐘 30 次、`/api/store/*` 60 次、註冊＋登入＋改密碼 10 次（登入另外每個帳號 10 次），IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`。`/data/*` 靜態檔不受限 |
 | 404 | `NOT_FOUND` | 刪除不存在的文件（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 
 > 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。
