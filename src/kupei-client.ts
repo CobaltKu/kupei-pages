@@ -9,7 +9,12 @@
 //   6. 雲端文件（store）：整包 JSON＋版本號；update() 讀改寫並自動處理 409。
 //   7. 使用者帳號：auth.register／login 拿登入權杖（存在 storage key kupei:session），之後所有請求都用它，
 //      雲端文件依帳號分開存。權杖優先順序：登入權杖 ＞ 寫入權杖 ＞ 建置時的唯讀權杖。
-//      用登入權杖時收到 401 UNAUTHENTICATED（過期、在別處登出、帳號被停用）→ 自動清掉 session，前端回到未登入。
+//      用登入權杖時收到 401 UNAUTHENTICATED（過期、在別處登出、帳號被停用、在別台裝置改了密碼）→ 自動清掉 session，前端回到未登入。
+//      註冊前先呼叫 auth.config()：inviteRequired 為 true 時註冊畫面要多一個邀請碼欄位。
+//      auth.changePassword() 成功後這個帳號所有裝置的舊權杖都失效，這台自動換成新權杖。
+//   8. 可選批次檔（help.json 說明頁、valuation.json 估價、node_info.json 節點完整定義）：不在 loadDataset 裡，
+//      要用時才呼叫 loadHelp()／loadValuation()／loadNodeInfo()。這個批次沒交付（manifest.hashes 沒有該鍵）→ 回 null、
+//      不打網路；有就帶 ?v=<雜湊> 抓一次，同一個批次之後直接回記憶體，換批次才重抓。內容形狀由批次交付方決定，用前自己檢查。
 //
 // 用法：
 //   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE, token: import.meta.env.VITE_KUPEI_TOKEN })
@@ -17,23 +22,31 @@
 //   const ds = await kupei.loadDataset({ onUpdate })     // 可能先回快取的舊批次，換批次時 onUpdate 會再給新的
 //   const latest = await kupei.marketLatest()
 //   const q = quoteOf(latest, '2330')
-//   await kupei.auth.register(username, password)        // 或 kupei.auth.login(...)；成功回 { user }
+//   const valuation = await kupei.loadValuation()         // 這個批次沒有估價就是 null → 不要顯示估價欄位
+//   const help = await kupei.loadHelp()                   // 說明頁；null ＝ 沒交付
+//   const nodeInfo = await kupei.loadNodeInfo()           // 節點完整定義；null ＝ 沒交付（英文名仍看 ds.nodeName）
+//   const { inviteRequired } = await kupei.auth.config()  // 註冊要不要邀請碼
+//   await kupei.auth.register(username, password, inviteCode)   // 或 kupei.auth.login(...)；成功回 { user }
+//   await kupei.auth.changePassword(current, next)       // 其他裝置全部登出，這台換新權杖
 //   kupei.getSession()                                   // { username, expiresAt } | null，同步、不打網路
 //   await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))   // 跨裝置同步（依帳號）
 //   await kupei.auth.logout()
 import type {
   ApiErrorBody,
+  AuthConfig,
   AuthResponse,
   AuthUser,
   Company,
   Doc,
   DocMeta,
   Head,
+  HelpDoc,
   History,
   LatestResponse,
   Major,
   Manifest,
   MarketStatus,
+  NodeInfo,
   Quote,
   RawRow,
   RawSummary,
@@ -41,6 +54,7 @@ import type {
   StoredSession,
   Translations,
   TreeNode,
+  Valuation,
   ValuationParam,
 } from './kupei-types'
 
@@ -164,9 +178,11 @@ const LATEST_TTL_MS = 60_000
 const HISTORY_BATCH = 30
 
 type BatchName = 'summary' | 'tr' | 'vparams' | 'nodes'
+/** 可選批次檔：manifest.hashes 有這個鍵才有檔案 */
+type OptionalBatchName = 'help' | 'valuation' | 'node_info'
 
 /** manifest 裡有雜湊的用雜湊，沒有的（details）用發布時間；網址一變，瀏覽器就當成新檔案 */
-function versionOf(m: Manifest, name?: BatchName): string {
+function versionOf(m: Manifest, name?: BatchName | OptionalBatchName): string {
   return encodeURIComponent((name && m.hashes[name]) || m.published_at)
 }
 
@@ -318,6 +334,24 @@ export function createKupeiClient(cfg: KupeiConfig) {
   let current: Dataset | null = null
   let loading: Promise<Dataset> | null = null
   const details = new Map<string, Promise<TreeNode[]>>()
+  /** 可選批次檔：依「run＋檔名＋雜湊」快取（進行中的請求也共用）；換批次時清掉舊批次的 */
+  const extras = new Map<string, Promise<unknown>>()
+
+  async function loadOptional<T>(name: OptionalBatchName, low = false): Promise<T | null> {
+    const ds = await client.loadDataset()
+    const m = ds.manifest
+    const hash = m.hashes[name]
+    if (!hash) return null // 這個批次沒交付：檔案不存在，不打網路
+    const key = `${m.run}\n${name}\n${hash}`
+    let p = extras.get(key)
+    if (!p) {
+      for (const k of extras.keys()) if (!k.startsWith(`${m.run}\n`)) extras.delete(k) // 舊批次的不留
+      p = get<T>(`/data/${m.run}/${name}.json?v=${versionOf(m, name)}`, { low })
+      p.catch(() => extras.delete(key)) // 失敗不快取，下次重試
+      extras.set(key, p)
+    }
+    return p as Promise<T>
+  }
   const histories = new Map<string, History>()
 
   // ── 行情：共用進行中的請求＋ 60 秒記憶體快取（和伺服器的快取時間一致） ──
@@ -429,6 +463,15 @@ export function createKupeiClient(cfg: KupeiConfig) {
       return p
     },
 
+    /** 說明頁定義（help.json）。這個批次沒交付回 null（不打網路）；同一批次只抓一次 */
+    loadHelp: (low = false) => loadOptional<HelpDoc>('help', low),
+
+    /** 估價（valuation.json），原樣、後端不計算。沒交付回 null → 不要顯示估價欄位；同一批次只抓一次 */
+    loadValuation: (low = false) => loadOptional<Valuation>('valuation', low),
+
+    /** 節點完整定義（node_info.json，id → 物件）。沒交付回 null（英文名仍看 Dataset.nodeName）；同一批次只抓一次 */
+    loadNodeInfo: (low = false) => loadOptional<NodeInfo>('node_info', low),
+
     /** 低優先序預先載入明細（例如列表捲到附近時），失敗不丟錯 */
     prefetchDetail(code: string) {
       void client.loadDetail(code, true).catch(() => {})
@@ -482,10 +525,14 @@ export function createKupeiClient(cfg: KupeiConfig) {
     auth: {
       /**
        * 註冊並直接登入。帳號 3～32 字（英數與 _ . -，開頭英數，不分大小寫），密碼 8～128 字。
-       * 錯誤：409 USERNAME_TAKEN、400 BAD_REQUEST、429 RATE_LIMITED（每分鐘 10 次）
+       * inviteCode：config().inviteRequired 為 true 時必填（關閉時會被忽略，帶了也沒關係）。
+       * 錯誤：409 USERNAME_TAKEN、400 BAD_REQUEST、403 INVITE_REQUIRED（沒填邀請碼）、403 INVITE_INVALID（邀請碼不對）、
+       * 429 RATE_LIMITED（每分鐘 10 次）
        */
-      async register(username: string, password: string): Promise<{ user: AuthUser }> {
-        const r = await get<AuthResponse>('/api/auth/register', { method: 'POST', body: { username: username.trim(), password }, cache: 'no-store', anonymous: true })
+      async register(username: string, password: string, inviteCode?: string): Promise<{ user: AuthUser }> {
+        const code = inviteCode?.trim()
+        const body = { username: username.trim(), password, ...(code ? { inviteCode: code } : {}) }
+        const r = await get<AuthResponse>('/api/auth/register', { method: 'POST', body, cache: 'no-store', anonymous: true })
         setSession({ token: r.token, username: r.user.username, expiresAt: r.expiresAt })
         return { user: r.user }
       },
@@ -507,6 +554,30 @@ export function createKupeiClient(cfg: KupeiConfig) {
         } catch {
           /* 已經失效或離線：本機已登出即可 */
         }
+      },
+
+      /**
+       * 改密碼（要已登入）。新密碼 8～128 字。成功後這個帳號所有裝置的登入權杖都失效（包含這台的舊權杖），
+       * 這台自動換成伺服器發的新權杖（onSessionChange 會收到同一個帳號、新的 expiresAt）。
+       * 錯誤：401 INVALID_CREDENTIALS（目前密碼不對；session 保留、不會被登出）、400 BAD_REQUEST、
+       * 401 UNAUTHENTICATED（登入已失效，session 會被清掉）、429 RATE_LIMITED（與註冊、登入合計每分鐘 10 次）
+       */
+      async changePassword(currentPassword: string, newPassword: string): Promise<{ user: AuthUser }> {
+        const s = liveSession()
+        if (!s) throw new KupeiError(401, 'UNAUTHENTICATED', '還沒登入', null)
+        const r = await get<AuthResponse>('/api/auth/password', {
+          method: 'POST',
+          body: { currentPassword, newPassword },
+          cache: 'no-store',
+          token: s.token,
+        })
+        setSession({ token: r.token, username: r.user.username, expiresAt: r.expiresAt })
+        return { user: r.user }
+      },
+
+      /** 註冊設定（不需要登入）：inviteRequired 為 true 時註冊要填邀請碼。每次打開註冊畫面時呼叫即可，不用快取 */
+      async config(): Promise<AuthConfig> {
+        return get<AuthConfig>('/api/auth/config', { cache: 'no-store', anonymous: true })
       },
 
       /** 向後端確認登入還有效（例如 App 啟動時）。失效會丟 KupeiError 401 並自動清掉 session；沒登入回 null */

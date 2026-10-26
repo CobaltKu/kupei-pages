@@ -1,4 +1,4 @@
-// KuPei 唯讀 API 的資料型別。與線上批次格式一致（2026-10-23）；欄位只增不減。
+// KuPei 唯讀 API 的資料型別。與線上批次格式一致（2026-10-23；10-27 加可選批次檔 help／valuation／node_info）；欄位只增不減。
 // 來源說明見 KuPei-API.md 附錄 A。
 
 export interface Manifest {
@@ -7,9 +7,38 @@ export interface Manifest {
   source_file: string
   /** 有明細樹的公司代號 */
   details: string[]
-  hashes: Record<string, string>
+  hashes: ManifestHashes
   status_notes: { translations: string; spec_current: string; sources: string[] }
 }
+
+/**
+ * 批次檔的內容雜湊（網址帶 ?v=<雜湊>）。summary、vparams、tr、nodes 四個鍵永遠在；
+ * help、valuation、node_info 是可選鍵：該批次有交付對應檔案才有，沒有這個鍵就代表檔案不存在（不要請求，會 404）。
+ * 之後可能再加鍵。
+ */
+export interface ManifestHashes {
+  summary: string
+  vparams: string
+  tr: string
+  nodes: string
+  help?: string
+  valuation?: string
+  node_info?: string
+  [key: string]: string | undefined
+}
+
+// ── 可選批次檔（/data/<run>/help.json、valuation.json、node_info.json） ──
+// 這三個檔的內部形狀由評分批次交付方決定，後端原樣發布、不計算也不檢查，所以這裡刻意不寫死欄位。
+// 用之前自己檢查形狀（缺欄位、型別不對都要能退回「沒有資料」的畫面）。
+
+/** help.json：說明頁定義，任意 JSON */
+export type HelpDoc = unknown
+
+/** valuation.json：估價，JSON 物件（例如依公司代號或依欄位分組，以交付方說明為準） */
+export type Valuation = Record<string, unknown>
+
+/** node_info.json：節點 id → 完整定義物件（交付的 nodes 是物件形時才有；英文名仍在 nodes.json） */
+export type NodeInfo = Record<string, Record<string, unknown>>
 
 export interface Head {
   requested_period: string
@@ -55,7 +84,12 @@ export type RawRow = [string, string, string, 0 | 1, number | null, number | nul
 export interface RawSummary {
   head: Head
   majors: Major[]
+  /** 每列固定 11 欄、大項格固定 8 欄；批次不會在這裡加欄位（新資料放 company_meta 或其他頂層鍵） */
   rows: RawRow[]
+  /** 批次可帶的公司層級額外資料（形狀由批次交付方決定，後端原樣保留）；沒交付就沒有這個鍵 */
+  company_meta?: unknown
+  /** 批次可能帶其他頂層鍵，後端原樣保留 */
+  [key: string]: unknown
 }
 
 /** 解碼後的大項格 */
@@ -118,6 +152,11 @@ export interface TreeNode {
   c: TreeNode[]
   /** 只有第一層有：大項名次 */
   mr?: number | null
+  /**
+   * 批次可帶的額外欄位（例如 goal、definition、peer_rank），後端原樣保留；形狀由批次交付方決定，
+   * 沒交付就沒有這些鍵。用之前自己檢查型別
+   */
+  [key: string]: unknown
 }
 
 /** [參數, 用途, 定義, 狀態, 對應項, 備註, 類別, 值, 單位, 其他] */
@@ -198,6 +237,18 @@ export interface AuthResponse {
   token: string
   /** ISO 8601（UTC） */
   expiresAt: string
+}
+
+/** GET /api/auth/config：註冊要不要邀請碼（不回傳邀請碼本身）。打開時註冊畫面要多一個「邀請碼」欄位 */
+export interface AuthConfig {
+  inviteRequired: boolean
+}
+
+/** POST /api/auth/password 的本文。成功回 AuthResponse（新的登入權杖；這個帳號所有舊權杖都失效） */
+export interface ChangePasswordBody {
+  currentPassword: string
+  /** 8～128 字 */
+  newPassword: string
 }
 
 /** 客戶端存在 storage 的登入狀態（key kupei:session） */

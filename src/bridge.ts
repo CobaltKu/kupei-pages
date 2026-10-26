@@ -26,6 +26,14 @@ let pushTimer = 0
 let mode: 'login' | 'register' = 'login'
 let acctOpen = false
 let formMsg = ''
+/** 註冊要不要邀請碼：null＝還不知道（config 沒回來或失敗時不擋，等後端回 INVITE_REQUIRED 再顯示欄位） */
+let inviteRequired: boolean | null = null
+let inviteLoading = false
+let pwMsg = ''
+let pwOk = false
+let pwOpen = false
+/** 改密碼成功後下一次重畫不還原輸入框（舊密碼不該留在畫面上） */
+let wipeInputs = false
 
 const client = createKupeiClient({
   baseUrl: BASE,
@@ -353,8 +361,19 @@ async function onLogin() {
 const ERR: Record<string, string> = {
   INVALID_CREDENTIALS: '帳號或密碼不正確', USERNAME_TAKEN: '這個帳號已被使用', RATE_LIMITED: '嘗試次數太多，請稍後再試',
   BAD_REQUEST: '帳號或密碼格式不符：帳號 3～32 字（英數與 _ . -，開頭英數），密碼 8～128 字', UNAUTHENTICATED: '登入已過期，請重新登入',
+  INVITE_REQUIRED: '需要邀請碼，請輸入維護者給你的邀請碼', INVITE_INVALID: '邀請碼不對',
 }
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+
+/** 切到「建立帳號」時問一次後端要不要邀請碼（成功就快取，失敗下次再問） */
+function loadInviteConfig() {
+  if (inviteRequired !== null || inviteLoading) return
+  inviteLoading = true
+  client.auth.config()
+    .then((c) => { if (inviteRequired === null) inviteRequired = c.inviteRequired; if (acctOpen) renderAcct() })
+    .catch((e) => console.warn('[kupei] 讀取註冊設定失敗，先不顯示邀請碼欄位', e))
+    .finally(() => { inviteLoading = false })
+}
 
 function setSyncMsg(t: string) { syncMsg = t; if (acctOpen) renderAcct() }
 
@@ -366,11 +385,20 @@ function renderAcct() {
   let host = document.getElementById('acct-host')
   if (!acctOpen) { host?.remove(); return }
   if (!host) { host = document.createElement('div'); host.id = 'acct-host'; document.body.appendChild(host) }
+  // 重畫會清掉輸入框；驗證失敗或背景更新時保留已輸入的內容（欄位 id 相同才還原）
+  const kept = new Map([...host.querySelectorAll<HTMLInputElement>('input[id]')].map((i) => [i.id, i.value]))
   if (s) {
     host.innerHTML = `<div class="acct-backdrop" data-acct-close="1"></div><div class="acct-modal" role="dialog" aria-label="帳號">
       <h2>帳號</h2><p>已登入：<b>${esc(s.username)}</b>（有效至 ${esc(s.expiresAt.slice(0, 10))}）</p>
       <p class="acct-muted">自選群組與新聞／報告設定依帳號存到雲端，換裝置登入同一帳號就同步。${esc(syncMsg ? '　' + syncMsg : '')}</p>
       <div class="acct-row"><button class="acct-btn" data-acct-sync="1">立即同步</button><button class="acct-btn ghost" data-acct-logout="1">登出</button><button class="acct-btn ghost" data-acct-close="1">關閉</button></div>
+      <details class="acct-adv" id="acct-pw-box"${pwOpen ? ' open' : ''}><summary>改密碼</summary>
+        <p class="acct-muted">改完後其他裝置會全部登出，這台維持登入。</p>
+        <label>目前密碼<input id="acct-pw-cur" type="password" autocomplete="current-password" maxlength="128"></label>
+        <label>新密碼<input id="acct-pw-new" type="password" autocomplete="new-password" maxlength="128"></label>
+        <label>再輸入一次新密碼<input id="acct-pw-new2" type="password" autocomplete="new-password" maxlength="128"></label>
+        <p class="${pwOk ? 'acct-muted' : 'acct-err'}" id="acct-pw-msg">${esc(pwMsg)}</p>
+        <div class="acct-row"><button class="acct-btn" data-acct-pw="1">更改密碼</button></div></details>
       <p class="acct-muted">登出後資料保留在這台瀏覽器；目前沒有忘記密碼功能。</p></div>`
   } else {
     host.innerHTML = `<div class="acct-backdrop" data-acct-close="1"></div><div class="acct-modal" role="dialog" aria-label="登入">
@@ -378,6 +406,7 @@ function renderAcct() {
       <p class="acct-muted">評分與行情不需要登入；登入後自選與設定可跨裝置同步。</p>
       <label>帳號<input id="acct-user" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="32"></label>
       <label>密碼<input id="acct-pass" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" maxlength="128"></label>
+      ${mode === 'register' && inviteRequired === true ? '<label>邀請碼<input id="acct-invite" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64"></label>' : ''}
       ${mode === 'register' ? '<label>再輸入一次密碼<input id="acct-pass2" type="password" autocomplete="new-password" maxlength="128"></label><p class="acct-muted">帳號 3～32 字（英數與 _ . -，開頭英數，自動轉小寫）；密碼 8～128 字。目前沒有忘記密碼功能。</p>' : ''}
       <p class="acct-err" id="acct-err">${esc(formMsg)}</p>
       <div class="acct-row"><button class="acct-btn" data-acct-submit="1">${mode === 'login' ? '登入' : '建立並登入'}</button><button class="acct-btn ghost" data-acct-mode="1">${mode === 'login' ? '建立帳號' : '改為登入'}</button><button class="acct-btn ghost" data-acct-close="1">取消</button></div>
@@ -388,6 +417,27 @@ function renderAcct() {
         <p class="acct-muted">${esc(syncMsg)}</p></details></div>`
     ;(document.getElementById('acct-user') as HTMLInputElement | null)?.focus()
   }
+  if (wipeInputs) { wipeInputs = false; kept.clear() }
+  for (const [id, v] of kept) { const el = document.getElementById(id) as HTMLInputElement | null; if (el && v) el.value = v }
+}
+
+async function submitPassword() {
+  const val = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value ?? ''
+  const cur = val('acct-pw-cur'), next = val('acct-pw-new'), next2 = val('acct-pw-new2')
+  pwOpen = true; pwOk = false
+  if (!cur) pwMsg = '請輸入目前密碼'
+  else if (next.length < 8 || next.length > 128) pwMsg = '新密碼要 8～128 字'
+  else if (next2 !== next) pwMsg = '兩次輸入的新密碼不一樣'
+  else {
+    pwMsg = '處理中…'; renderAcct()
+    try {
+      await client.auth.changePassword(cur, next)
+      pwOk = true; pwMsg = '密碼已更改，其他裝置已登出'; pwOpen = false; wipeInputs = true
+    } catch (e) {
+      pwMsg = e instanceof KupeiError ? (e.code === 'INVALID_CREDENTIALS' ? '目前密碼不正確' : ERR[e.code] || `失敗（${e.status}）`) : '無法連線，請稍後再試'
+    }
+  }
+  renderAcct()
 }
 
 async function submitForm() {
@@ -395,13 +445,17 @@ async function submitForm() {
   const p = (document.getElementById('acct-pass') as HTMLInputElement).value
   if (!u || !p) { formMsg = '請輸入帳號與密碼'; renderAcct(); return }
   if (mode === 'register' && p !== (document.getElementById('acct-pass2') as HTMLInputElement | null)?.value) { formMsg = '兩次輸入的密碼不一致'; renderAcct(); return }
+  const invite = (document.getElementById('acct-invite') as HTMLInputElement | null)?.value.trim() ?? ''
+  if (mode === 'register' && inviteRequired === true && !invite) { formMsg = ERR.INVITE_REQUIRED; renderAcct(); return }
   formMsg = '處理中…'; renderAcct()
   try {
     if (mode === 'login') await client.auth.login(u, p)
-    else await client.auth.register(u, p)
+    else await client.auth.register(u, p, inviteRequired === true ? invite : undefined)
     formMsg = ''
     renderAcct()
   } catch (e) {
+    // 註冊設定沒讀到（或剛被打開）時，後端說要邀請碼就把欄位顯示出來
+    if (e instanceof KupeiError && (e.code === 'INVITE_REQUIRED' || e.code === 'INVITE_INVALID')) inviteRequired = true
     formMsg = e instanceof KupeiError ? ERR[e.code] || `失敗（${e.status}）` : '無法連線，請稍後再試'
     renderAcct()
   }
@@ -409,10 +463,11 @@ async function submitForm() {
 
 document.addEventListener('click', (e) => {
   const t = e.target as HTMLElement
-  if (t.closest('[data-acct]')) { acctOpen = true; formMsg = ''; renderAcct(); return }
+  if (t.closest('[data-acct]')) { acctOpen = true; formMsg = ''; pwMsg = ''; pwOpen = false; renderAcct(); return }
   if (!acctOpen) return
   if (t.closest('[data-acct-close]')) { acctOpen = false; renderAcct() }
-  else if (t.closest('[data-acct-mode]')) { mode = mode === 'login' ? 'register' : 'login'; formMsg = ''; renderAcct() }
+  else if (t.closest('[data-acct-mode]')) { mode = mode === 'login' ? 'register' : 'login'; formMsg = ''; if (mode === 'register') loadInviteConfig(); renderAcct() }
+  else if (t.closest('[data-acct-pw]')) void submitPassword()
   else if (t.closest('[data-acct-submit]')) void submitForm()
   else if (t.closest('[data-acct-sync]')) void onLogin().then(() => pushDirty())
   else if (t.closest('[data-acct-wt-save]')) {
@@ -421,6 +476,8 @@ document.addEventListener('click', (e) => {
   } else if (t.closest('[data-acct-wt-clear]')) { client.setWriteToken(null); setSyncMsg('已清除寫入權杖；資料保留在這台瀏覽器'); renderAcct() }
   else if (t.closest('[data-acct-logout]')) void client.auth.logout().then(() => { const m = readMeta(); m.user = undefined; writeMeta(m); syncMsg = ''; acctOpen = false; renderAcct() })
 })
+// <details> 的 toggle 不冒泡，用捕獲階段記住展開狀態（背景同步訊息觸發重畫時才不會被收起來）
+document.addEventListener('toggle', (e) => { const t = e.target as HTMLElement; if (t.id === 'acct-pw-box') pwOpen = (t as HTMLDetailsElement).open }, true)
 document.addEventListener('keydown', (e) => {
   if (!acctOpen) return
   if (e.key === 'Escape') { acctOpen = false; renderAcct() }
