@@ -49,7 +49,20 @@ const client = createKupeiClient({
 
 const DONE: Record<string, 1> = { MISSING_ROW: 1, NOT_ASSESSED: 1 }
 
+/* 轉換結果依來源物件記憶化：同一個 Dataset／同一份 latest 只轉一次（換批次、行情更新時來源物件不同，自然重算） */
+const homeMemo = new WeakMap<Dataset, Json>()
+const quotesMemo = new WeakMap<LatestResponse, Json>()
+const companyMemo = new WeakMap<Dataset, Map<string, Json>>()
+
 function adaptHome(ds: Dataset): Json {
+  const hit = homeMemo.get(ds)
+  if (hit) return hit
+  const out = adaptHomeOnce(ds)
+  homeMemo.set(ds, out)
+  return out
+}
+
+function adaptHomeOnce(ds: Dataset): Json {
   const h = ds.head
   const rows = ds.companies.map((c) => {
     const assessed = !c.maj.every((m) => DONE[m.st])
@@ -126,16 +139,38 @@ function adaptStatus(ds: Dataset, latest: LatestResponse | null): Json {
   }
 }
 
-/* 後端選用檔：/data/<run>/valuation.json、help.json。沒有就回 404，UI 顯示「尚未提供」 */
-async function dataFile(ds: Dataset, name: string): Promise<Reply> {
+/** /api/market/latest → UI 的 /quotes 形狀。dates.L／O 一起帶出去，畫面標示上市、上櫃各自的收盤日 */
+function adaptQuotes(latest: LatestResponse): Json {
+  const hit = quotesMemo.get(latest)
+  if (hit) return hit
+  const day = [latest.dates.L, latest.dates.O].filter(Boolean).sort().pop() ?? null
+  const quotes: Json = {}
+  for (const id of Object.keys(latest.quotes)) {
+    const q = quoteOf(latest, id)
+    if (!q) continue
+    quotes[id] = {
+      price: q.close, prev_close: q.close != null && q.change != null ? q.close - q.change : null,
+      change: q.change, change_pct: q.pct, volume: q.volume, status: 'CLOSE', source_time: day ? `${day}T13:30:00+08:00` : null,
+    }
+  }
+  const out = {
+    market_status: 'CLOSED', last_success_at: day ? `${day}T13:30:00+08:00` : null, trading_date: day, seq: 0,
+    dates: { L: latest.dates.L ?? null, O: latest.dates.O ?? null }, quotes,
+  }
+  quotesMemo.set(latest, out)
+  return out
+}
+
+/*
+ * 後端選用檔（valuation.json、help.json）：走 kupei-client 的 loadValuation／loadHelp。
+ * manifest.hashes 沒有該鍵＝這個批次沒交付 → 不打網路直接回 null（原本每次都打一次 404）；有就帶雜湊抓一次、同批次共用。
+ */
+async function optionalFile(load: () => Promise<unknown>): Promise<Reply> {
   try {
-    const r = await fetch(`${BASE}/data/${ds.manifest.run}/${name}?v=${encodeURIComponent(ds.manifest.published_at)}`, {
-      headers: READ_TOKEN ? { Authorization: `Bearer ${READ_TOKEN}` } : {},
-    })
-    if (!r.ok) return { ok: false, status: r.status, data: null }
-    return { ok: true, status: 200, data: await r.json() }
-  } catch {
-    return { ok: false, status: 0, data: null }
+    const data = await load()
+    return data == null ? no(404) : ok(data)
+  } catch (e) {
+    return no(e instanceof KupeiError ? e.status : 0)
   }
 }
 
@@ -165,20 +200,7 @@ async function req(method: string, path: string): Promise<Reply> {
   const m = method.toUpperCase()
   const [p, qs = ''] = path.split('?')
   try {
-    if (m === 'GET' && p === '/quotes') {
-      const latest = await client.marketLatest()
-      const day = [latest.dates.L, latest.dates.O].filter(Boolean).sort().pop() ?? null
-      const quotes: Json = {}
-      for (const id of Object.keys(latest.quotes)) {
-        const q = quoteOf(latest, id)
-        if (!q) continue
-        quotes[id] = {
-          price: q.close, prev_close: q.close != null && q.change != null ? q.close - q.change : null,
-          change: q.change, change_pct: q.pct, volume: q.volume, status: 'CLOSE', source_time: day ? `${day}T13:30:00+08:00` : null,
-        }
-      }
-      return ok({ market_status: 'CLOSED', last_success_at: day ? `${day}T13:30:00+08:00` : null, trading_date: day, seq: 0, quotes })
-    }
+    if (m === 'GET' && p === '/quotes') return ok(adaptQuotes(await client.marketLatest()))
     if (m === 'GET' && p === '/market/history') {
       const ids = decodeURIComponent(new URLSearchParams(qs).get('ids') || '').split(',').filter(Boolean)
       const map: Map<string, Hist> = await client.marketHistory(ids)
@@ -195,12 +217,11 @@ async function req(method: string, path: string): Promise<Reply> {
     }
     if (m === 'GET' && p === '/valuation') {
       const ds = await loadDs()
-      const r = await dataFile(ds, 'valuation.json')
+      const r = await optionalFile(() => client.loadValuation())
       return r.ok ? ok(adaptValuation(ds, r.data)) : no(r.status || 404)
     }
     if (m === 'GET' && p === '/help') {
-      const ds = await loadDs()
-      const r = await dataFile(ds, 'help.json')
+      const r = await optionalFile(() => client.loadHelp())
       return r.ok && r.data?.features ? r : no(404)
     }
   } catch (e) {
@@ -228,9 +249,15 @@ const api = {
   },
   company: async (id: string) => {
     const ds = await loadDs()
+    let memo = companyMemo.get(ds)
+    if (!memo) companyMemo.set(ds, (memo = new Map()))
+    const hit = memo.get(id)
+    if (hit) return hit
     let tree: TreeNode[] | null = null
     try { tree = await client.loadDetail(id) } catch (e) { if (!(e instanceof KupeiError && e.status === 404)) throw e }
-    return adaptCompany(ds, id, tree)
+    const out = adaptCompany(ds, id, tree)
+    memo.set(id, out)
+    return out
   },
 }
 

@@ -18,3 +18,5 @@
 .acct-adv { margin-top: 14px; border-top: 1px solid var(--line, #24292e); padding-top: 8px; }
 .acct-adv summary { cursor: pointer; font-size: 12px; color: var(--muted, #9aa3ab); }
 .acct-adv input { margin-top: 6px; }
+/* 個股頁估價卡：價格格太窄，漲跌幅被省略號吃掉 → 漲跌幅換到價格下一行 */
+.vrow .v .chg { display: block; margin-left: 0; }
