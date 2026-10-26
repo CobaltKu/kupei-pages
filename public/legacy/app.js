@@ -13,7 +13,7 @@ $('loading').hidden=false;
 Promise.all([KupeiAPI.home(),KupeiAPI.status(),KupeiAPI.notes(),KupeiAPI.req('GET','/watchlist').catch(function(){return {ok:false};}),KupeiAPI.req('GET','/auth/session').catch(function(){return {ok:false};}),KupeiAPI.req('GET','/settings/news').catch(function(){return {ok:false};})]).then(function(res){
   $('loading').hidden=true;$('h-err').hidden=true;$('h-wrap').style.display='';
   main(res[0],res[1]||{},res[2],{watch:res[3],auth:res[4],news:res[5]});
-},bootFail);
+}).catch(function(err){if(window.console)console.error(err);bootFail(err);}); /* main 內的例外也要接住，不讓畫面卡在半初始化 */
 
 function main(S,STAT,TRN,SB){
 var H=S.head, MJ=S.majors;
@@ -66,15 +66,44 @@ function chgColor(x){return x>0.005?'var(--up)':(x<-0.005?'var(--down)':'#8C959E
 var GMAX=50; /* V1.0 B5：每組上限 50 */
 var W=null,NS=null,RS=null;
 var LS='kupei3_';
+/* 本機資料可能來自雲端文件同步（可被改寫）：讀入時做結構驗證，不合格的欄位丟棄或修正，整份壞掉退回預設 */
+function isObj(o){return !!o&&typeof o==='object'&&!Array.isArray(o);}
+function isGid(x){return typeof x==='number'&&x>0&&x<=1e6&&Math.floor(x)===x;}
+function isSid(x){return typeof x==='string'&&/^[0-9A-Za-z]{1,10}$/.test(x)&&!!BYID[x];}
+function strList(a,max,len){var out=[];if(!Array.isArray(a))return out;a.forEach(function(s){if(typeof s!=='string')return;s=s.trim().slice(0,len||50);if(s&&out.indexOf(s)<0&&out.length<max)out.push(s);});return out;}
+function cleanW(raw){
+  var seen={},gids={},groups=[];
+  if(isObj(raw)&&Array.isArray(raw.groups))raw.groups.forEach(function(g){
+    if(!isObj(g)||!isGid(g.id)||gids[g.id]||groups.length>=5)return;gids[g.id]=1;
+    var ids=[];(Array.isArray(g.ids)?g.ids:[]).forEach(function(x){if(isSid(x)&&!seen[x]&&ids.length<GMAX){seen[x]=1;ids.push(x);}});
+    var nm=typeof g.name==='string'?g.name.trim().slice(0,12):'';
+    groups.push({id:g.id,name:nm||('自選'+g.id),ids:ids});
+  });
+  if(!groups.length)return {groups:[{id:1,name:'自選1',color:COLORS[0],ids:[]}],cur:1};
+  groups.forEach(function(g,i){g.color=COLORS[i%5];});
+  return {groups:groups,cur:groups.some(function(g){return g.id===raw.cur;})?raw.cur:groups[0].id};
+}
+function cleanKw(o,max){return {kw:strList(o&&o.kw,max),ex:strList(o&&o.ex,5)};}
+function cleanNS(raw){
+  var ns={span:1,groups:[],stock:{}};if(!isObj(raw))return ns;
+  if(raw.span===1||raw.span===3)ns.span=raw.span;
+  var gids={};(Array.isArray(raw.groups)?raw.groups:[]).forEach(function(g){if(!isObj(g)||!isGid(g.id)||gids[g.id])return;gids[g.id]=1;var k=cleanKw(g,5);ns.groups.push({id:g.id,kw:k.kw,ex:k.ex});});
+  if(isObj(raw.stock))Object.keys(raw.stock).forEach(function(id){if(isSid(id)&&isObj(raw.stock[id]))ns.stock[id]=cleanKw(raw.stock[id],5);});
+  if(raw.disabled!=null)ns.disabled=strList(raw.disabled,200,100);
+  return ns;
+}
+function cleanRS(raw){
+  var rs={},fids=MJ.map(function(m){return m.id;});if(!isObj(raw))return rs;
+  Object.keys(raw).forEach(function(id){var s=raw[id];if(!isSid(id)||!isObj(s))return;
+    rs[id]={kw:strList(s.kw,10),time:typeof s.time==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s.time)?s.time:'',news:s.news!==false,focus:strList(s.focus,fids.length,50).filter(function(f){return fids.indexOf(f)>=0;}),cmp:s.cmp!==false};
+    if(typeof s.status==='string')rs[id].status=s.status.slice(0,40);});
+  return rs;
+}
+function lsJson(k){try{return JSON.parse(lsGet(k)||'null');}catch(e){return null;}}
 function loadAll(){
-  try{W=JSON.parse(lsGet(LS+'watch')||'null');}catch(e){W=null;}
-  if(!W||!W.groups||!W.groups.length)W={groups:[{id:1,name:'自選1',color:COLORS[0],ids:[]}],cur:1};
-  W.groups.forEach(function(g,i){g.color=COLORS[i%5];g.ids=g.ids.filter(function(x){return BYID[x];});});
-  try{NS=JSON.parse(lsGet(LS+'news')||'null');}catch(e){NS=null;}
-  if(!NS)NS={span:1,groups:[],stock:{}};
-  if(!NS.span)NS.span=1;
-  try{RS=JSON.parse(lsGet(LS+'report')||'null');}catch(e){RS=null;}
-  if(!RS)RS={};
+  try{W=cleanW(lsJson(LS+'watch'));}catch(e){W=cleanW(null);}
+  try{NS=cleanNS(lsJson(LS+'news'));}catch(e){NS=cleanNS(null);}
+  try{RS=cleanRS(lsJson(LS+'report'));}catch(e){RS={};}
 }
 function saveW(){lsSet(LS+'watch',JSON.stringify(W));}
 function nextColor(){var used=W.groups.map(function(g){return g.color;});for(var i=0;i<COLORS.length;i++)if(used.indexOf(COLORS[i])<0)return COLORS[i];return COLORS[0];}
@@ -239,7 +268,7 @@ document.addEventListener('click',function(e){var t=e.target.closest('[data-lgok
 document.addEventListener('keydown',function(e){if(e.target&&e.target.id==='lg-pw'&&e.key==='Enter')doLogin();});
 
 /* ---------- 本機資料一次性匯入（需求 V1 K14-3） ---------- */
-function localData(){var w=null,n=null,r=null;try{w=JSON.parse(lsGet(LS+'watch')||'null');n=JSON.parse(lsGet(LS+'news')||'null');r=JSON.parse(lsGet(LS+'report')||'null');}catch(e){}return {w:w,n:n,r:r};}
+function localData(){var w=null,n=null,r=null;try{w=lsJson(LS+'watch');w=w?cleanW(w):null;n=lsJson(LS+'news');n=n?cleanNS(n):null;r=lsJson(LS+'report');r=r?cleanRS(r):null;}catch(e){}return {w:w,n:n,r:r};}
 function importAvailable(){
   if(SRV.mode!=='server'||lsGet(LS+'imported'))return false;
   var srvEmpty=W.groups.every(function(g){return !g.ids.length;})&&!NS.groups.length;
@@ -288,7 +317,7 @@ function hm(iso){if(!iso)return '—';var d=new Date(iso);return isNaN(d)?'—':
 function md(s){if(!s)return '—';var p=String(s).slice(0,10).split('-');return p.length===3?(+p[1])+'/'+(+p[2]):s;}
 function qtLabel(){
   if(!QT.on)return '行情：尚未接上';
-  if(QT.st==='CLOSED')return '收盤價 '+md(QT.tdate);
+  if(QT.st==='CLOSED')return '收盤價 '+esc(md(QT.tdate));
   if(QT.st==='DELAYED')return '<span style="color:var(--warn)">⚠ 行情延遲｜最後更新 '+hm(QT.last)+'</span>';
   return '成交價 '+hm(QT.last)+'｜FinMind';
 }
@@ -416,9 +445,9 @@ function scoreCell(m,act,extra){
   if(m.st!=='TRIAL_SCORE'&&m.st!=='POLICY_SCORE'){var c=CODE[m.st]||('UN');return '<td class="code'+cls+'">'+esc(c)+'</td>';}
   if(m.s==null)return '<td class="code'+cls+'">UN</td>';
   var a=(0.06+Math.max(0,Math.min(100,m.s))/100*0.55).toFixed(3);
-  return '<td class="sc num'+cls+'" style="background:rgba(58,128,228,'+a+')"><span class="s1">'+m.s.toFixed(1)+'</span><span class="s2">'+(m.pol?'<span class="pol" aria-label="政策分">政</span>':'')+'</span><span class="rk">('+(m.mr==null?'—':m.mr)+')</span></td>';
+  return '<td class="sc num'+cls+'" style="background:rgba(58,128,228,'+a+')"><span class="s1">'+m.s.toFixed(1)+'</span><span class="s2">'+(m.pol?'<span class="pol" aria-label="政策分">政</span>':'')+'</span><span class="rk">('+(m.mr==null?'—':esc(m.mr))+')</span></td>';
 }
-function pcMark(r){return (r.pc&&r.pc>=1)?'<span class="pm" tabindex="0" title="政策分大項 '+r.pc+'／12">政'+r.pc+'</span>':'';}
+function pcMark(r){return (r.pc&&r.pc>=1)?'<span class="pm" tabindex="0" title="政策分大項 '+esc(r.pc)+'／12">政'+esc(r.pc)+'</span>':'';}
 function dotFor(id){var g=groupOf(id);return g?'<span class="dot" style="background:'+g.color+'" title="'+esc(g.name)+'"></span>':'';}
 function badges(r,c){
   if(!r.assessed)return '';
@@ -430,7 +459,7 @@ function badges(r,c){
   if(r.finrev)h+='<span class="badge b-fin" title="財務複核（'+esc(GATE_LABEL)+'）'+esc(src(source.finSources))+'">複核</span>';
   return h;
 }
-function rankTxt(r){return !r.assessed?'未評估':(r.rank==null?'NR':r.rank);}
+function rankTxt(r){return !r.assessed?'未評估':(r.rank==null?'NR':esc(r.rank));}
 
 /* ================= HOME ================= */
 var HS={key:'total',dir:'desc',list:[],flash:null,sel:null,hideVeto:false,hideTrend:false};
@@ -469,7 +498,7 @@ function pxHtml(o){if(o.price==null)return '<span class="muted"'+(o.qst==='REALT
 function hHead(){
   var h='<th class="fz" style="left:0;min-width:'+FX[0]+'px;width:'+FX[0]+'px">名次</th><th class="fz" style="left:'+FX[0]+'px;min-width:'+FX[1]+'px;width:'+FX[1]+'px">代號</th><th class="fz" style="left:'+(FX[0]+FX[1])+'px;min-width:'+FX[2]+'px;width:'+FX[2]+'px;border-right:1px solid var(--line2)">公司</th>';
   MAJ.forEach(function(l,k){
-    h+='<th class="shd'+(HS.key==='m'+k?' on':'')+'"><button class="sortbtn" data-sort="m'+k+'" aria-label="依 '+l+' 排序"><span class="lab">'+l+'<span class="arrow">'+arrow('m'+k)+'</span></span></button></th>';
+    h+='<th class="shd'+(HS.key==='m'+k?' on':'')+'"><button class="sortbtn" data-sort="m'+k+'" aria-label="依 '+esc(l)+' 排序"><span class="lab">'+esc(l)+'<span class="arrow">'+arrow('m'+k)+'</span></span></button></th>';
   });
   if(!HS.wide)h+='<th class="vgrp first">下限</th><th class="vgrp">上限</th><th class="vgrp">數據上限</th>';
   JX.forEach(function(j,i){
@@ -484,19 +513,19 @@ function hHead(){
 function hRow(r){
   var o=sim(r.id),mg=margin(o),over=o.cap!=null&&o.price>o.cap,g=groupOf(r.id);
   var cls=(r.rank==null?'nd':'')+(!r.assessed?' na':'')+(HS.sel===r.id?' sel':'')+(HS.flash===r.id?' flash':'');
-  var h='<tr id="hr-'+r.id+'" class="'+cls+'">';
-  h+='<td class="fz num" style="left:0"><button class="selbtn" data-sel="'+r.id+'" aria-label="標示此列">'+rankTxt(r)+pcMark(r)+'</button></td>';
-  h+='<td class="fz mono" style="left:'+FX[0]+'px"><button class="selbtn" data-sel="'+r.id+'" aria-label="標示此列">'+r.id+'</button></td>';
-  h+='<td class="fz" style="left:'+(FX[0]+FX[1])+'px;border-right:1px solid var(--line2)"><button class="namelink" data-open="'+r.id+'" aria-label="開啟 '+esc(r.name)+' 個股分析"><span class="nm">'+esc(r.name)+'</span>'+dotFor(r.id)+'</button> '+badges(r)+'</td>';
+  var rid=esc(r.id),h='<tr id="hr-'+rid+'" class="'+cls+'">';
+  h+='<td class="fz num" style="left:0"><button class="selbtn" data-sel="'+rid+'" aria-label="標示此列">'+rankTxt(r)+pcMark(r)+'</button></td>';
+  h+='<td class="fz mono" style="left:'+FX[0]+'px"><button class="selbtn" data-sel="'+rid+'" aria-label="標示此列">'+rid+'</button></td>';
+  h+='<td class="fz" style="left:'+(FX[0]+FX[1])+'px;border-right:1px solid var(--line2)"><button class="namelink" data-open="'+rid+'" aria-label="開啟 '+esc(r.name)+' 個股分析"><span class="nm">'+esc(r.name)+'</span>'+dotFor(r.id)+'</button> '+badges(r)+'</td>';
   r.maj.forEach(function(m,k){h+=scoreCell(m,HS.key==='m'+k,'');});
   if(!HS.wide){h+='<td class="vgrp first num">'+fmt(o.min)+'</td><td class="vgrp num">'+fmt(o.max)+'</td>';
   h+='<td class="vgrp num'+(over?' over':'')+'">'+fmt(o.cap)+'</td>';}
-  h+='<td class="jr num'+(EX.stale?' stale':'')+'" data-q="'+r.id+'" style="right:'+jRight(0)+'px;border-left:1px solid var(--line2)">'+pxHtml(o)+'</td>';
+  h+='<td class="jr num'+(EX.stale?' stale':'')+'" data-q="'+rid+'" style="right:'+jRight(0)+'px;border-left:1px solid var(--line2)">'+pxHtml(o)+'</td>';
   h+='<td class="jr num" style="right:'+jRight(1)+'px">'+fmt(o.typ)+'</td>';
-  h+='<td class="jr num'+(EX.stale?' stale':'')+'" data-m="'+r.id+'" style="right:'+jRight(2)+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td>';
+  h+='<td class="jr num'+(EX.stale?' stale':'')+'" data-m="'+rid+'" style="right:'+jRight(2)+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td>';
   h+='<td class="jr num" style="right:'+jRight(3)+'px">'+gnHtml(o)+'</td>';
   if(HS.wide){h+='<td class="jr num" style="right:'+jRight(4)+'px;border-left:2px solid #3A4149">'+fmt(o.min)+'</td><td class="jr num" style="right:'+jRight(5)+'px">'+fmt(o.max)+'</td><td class="jr num'+(over?' vgrp over':'')+'" style="right:'+jRight(6)+'px">'+fmt(o.cap)+'</td>';}
-  h+='<td class="jr" style="right:0;text-align:center"><button class="addbtn'+(g?' on':'')+'" data-menu="'+r.id+'" aria-label="'+(g?'管理自選群組（目前 '+esc(g.name)+'）':'加入自選')+'">'+(g?'<span class="dot" style="background:'+g.color+'"></span>':'+')+'</button></td>';
+  h+='<td class="jr" style="right:0;text-align:center"><button class="addbtn'+(g?' on':'')+'" data-menu="'+rid+'" aria-label="'+(g?'管理自選群組（目前 '+esc(g.name)+'）':'加入自選')+'">'+(g?'<span class="dot" style="background:'+g.color+'"></span>':'+')+'</button></td>';
   return h+'</tr>';
 }
 function hCheckWide(){
@@ -512,20 +541,20 @@ var MX={open:{}};
 function majCell(m){if(m.st!=='TRIAL_SCORE'&&m.st!=='POLICY_SCORE'||m.s==null)return '<span class="code">'+esc(CODE[m.st]||'UN')+'</span>';return m.s.toFixed(1)+(m.pol?'<span class="pol">政</span>':'');}
 function mDetail(r,extra){
   var o=sim(r.id);
-  var g='<div class="mgrid">'+r.maj.map(function(m,k){return '<div><span class="k">'+esc(MAJ[k])+'</span><span class="v num">'+majCell(m)+'</span><span class="r">'+(m.mr==null?'—':'名次 '+m.mr)+'</span></div>';}).join('')+'</div>';
+  var g='<div class="mgrid">'+r.maj.map(function(m,k){return '<div><span class="k">'+esc(MAJ[k])+'</span><span class="v num">'+majCell(m)+'</span><span class="r">'+(m.mr==null?'—':'名次 '+esc(m.mr))+'</span></div>';}).join('')+'</div>';
   var v='<div class="mval">'+[['中心',fmt(o.typ)],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]].map(function(x){return '<div><span class="k">'+x[0]+'</span><span class="num">'+x[1]+'</span></div>';}).join('')+'</div>';
   return '<div class="mdet">'+v+g+(extra||'')+'</div>';
 }
 function mLine2(r){
   var k=HS.key;
-  if(k.charAt(0)==='m'){var m=r.maj[+k.slice(1)];return esc(MAJ[+k.slice(1)])+' '+(m.s==null||(m.st!=='TRIAL_SCORE'&&m.st!=='POLICY_SCORE')?(CODE[m.st]||'UN'):m.s.toFixed(1)+'（'+(m.mr==null?'—':m.mr)+'）');}
+  if(k.charAt(0)==='m'){var m=r.maj[+k.slice(1)];return esc(MAJ[+k.slice(1)])+' '+(m.s==null||(m.st!=='TRIAL_SCORE'&&m.st!=='POLICY_SCORE')?(CODE[m.st]||'UN'):m.s.toFixed(1)+'（'+(m.mr==null?'—':esc(m.mr))+'）');}
   return esc(r.id)+'｜'+esc(r.ind);
 }
 function mRow(r){
-  var o=sim(r.id),mg=margin(o),open=!!MX.open[r.id],g=groupOf(r.id);
-  var acts='<div class="mact"><a class="btn" href="#/stock/'+r.id+'/home">個股分析</a></div>';
-  var add='<button class="addbtn madd'+(g?' on':'')+'" data-menu="'+r.id+'" aria-label="'+(g?'管理自選群組（目前 '+esc(g.name)+'）':'加入自選')+'">'+(g?'<span class="dot" style="background:'+g.color+'"></span>':'＋')+'</button>';
-  return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+(HS.flash===r.id?' flash':'')+'" id="mr-'+r.id+'"><div class="mhwrap"><button class="mhead" data-mexp="'+r.id+'" aria-expanded="'+open+'"><span class="mrk num">'+rankTxt(r)+pcMark(r)+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+dotFor(r.id)+badges(r)+'</span><span class="l2">'+mLine2(r)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'" data-q2="'+r.id+'">'+pxHtml(o)+'</span><span class="mmg num'+(EX.stale?' stale':'')+'" data-m2="'+r.id+'" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+add+'</div>'+(open?mDetail(r,acts):'')+'</div>';
+  var o=sim(r.id),mg=margin(o),open=!!MX.open[r.id],g=groupOf(r.id),rid=esc(r.id);
+  var acts='<div class="mact"><a class="btn" href="#/stock/'+rid+'/home">個股分析</a></div>';
+  var add='<button class="addbtn madd'+(g?' on':'')+'" data-menu="'+rid+'" aria-label="'+(g?'管理自選群組（目前 '+esc(g.name)+'）':'加入自選')+'">'+(g?'<span class="dot" style="background:'+g.color+'"></span>':'＋')+'</button>';
+  return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+(HS.flash===r.id?' flash':'')+'" id="mr-'+rid+'"><div class="mhwrap"><button class="mhead" data-mexp="'+rid+'" aria-expanded="'+open+'"><span class="mrk num">'+rankTxt(r)+pcMark(r)+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+dotFor(r.id)+badges(r)+'</span><span class="l2">'+mLine2(r)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'" data-q2="'+rid+'">'+pxHtml(o)+'</span><span class="mmg num'+(EX.stale?' stale':'')+'" data-m2="'+rid+'" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+add+'</div>'+(open?mDetail(r,acts):'')+'</div>';
 }
 function mSortOpts(){
   var o=[['total','總名次'],['price','成交價'],['margin','安全邊際']].concat(MAJ.map(function(l,k){return ['m'+k,l];}));
@@ -583,7 +612,7 @@ function hNews(){
   hMNews();
   $('h-nhead').innerHTML='產業新聞顯示區間 '+segHtml()+'<span>'+(nSpan()===3?'近 3 天（前三日 07:30 – 今日 07:30）':'當日（前一日 07:30 – 今日 07:30）')+'；預設值可在「新聞關鍵字設定」調整</span>';
   $('h-news').innerHTML=NS.groups.map(function(g){
-    return '<div class="card"><div style="display:flex;align-items:baseline;gap:8px;min-width:0"><h2 style="white-space:nowrap">產業新聞</h2><span class="kw" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">｜'+esc(g.kw.join('、')||'（尚未設定關鍵字）')+'</span></div><div class="placeholder">'+NEWS_OFF+'</div><a href="#/news/g'+g.id+'" style="font-size:12px;align-self:flex-start">新聞頁</a></div>';
+    return '<div class="card"><div style="display:flex;align-items:baseline;gap:8px;min-width:0"><h2 style="white-space:nowrap">產業新聞</h2><span class="kw" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">｜'+esc(g.kw.join('、')||'（尚未設定關鍵字）')+'</span></div><div class="placeholder">'+NEWS_OFF+'</div><a href="#/news/g'+esc(g.id)+'" style="font-size:12px;align-self:flex-start">新聞頁</a></div>';
   }).join('')||'<div class="placeholder">尚未設定產業新聞關鍵字組，可到「新聞關鍵字設定」新增。</div>';
 }
 
@@ -592,24 +621,24 @@ function placeMenu(btn,w){var rect=btn.getBoundingClientRect(),left=Math.max(8,M
 function openMenu(id,btn){
   var r=BYID[id],g=groupOf(id);
   var h='<button class="backdrop" data-close="1" aria-label="關閉選單"></button><div class="menu" role="dialog" aria-label="自選群組" style="'+placeMenu(btn,260)+'">';
-  h+='<div class="menuhd">'+r.id+' '+esc(r.name)+'</div>';
+  h+='<div class="menuhd">'+esc(r.id)+' '+esc(r.name)+'</div>';
   W.groups.forEach(function(x){var full=x.ids.length>=GMAX&&!(g&&g.id===x.id);
-    h+='<button class="menuitem" role="menuitemradio" aria-checked="'+(g&&g.id===x.id)+'" data-setg="'+x.id+'" data-id="'+id+'"'+(full?' aria-disabled="true"':'')+'><span class="dot" style="background:'+x.color+'"></span><span style="flex:1 1 auto">'+esc(x.name)+' <span style="color:var(--faint)">'+x.ids.length+'/'+GMAX+'</span></span><span style="color:var(--accent)">'+(g&&g.id===x.id?'目前':'')+'</span></button>';});
-  if(W.groups.length<5)h+='<button class="menuitem" data-newg="'+id+'" style="color:var(--text2)">＋ 新增群組並加入</button>';else h+='<div class="menunote">已達 5 組上限</div>';
-  if(g)h+='<button class="menuitem" data-rmg="'+id+'" style="color:var(--up)">移出自選</button>';
+    h+='<button class="menuitem" role="menuitemradio" aria-checked="'+(g&&g.id===x.id)+'" data-setg="'+esc(x.id)+'" data-id="'+esc(id)+'"'+(full?' aria-disabled="true"':'')+'><span class="dot" style="background:'+x.color+'"></span><span style="flex:1 1 auto">'+esc(x.name)+' <span style="color:var(--faint)">'+x.ids.length+'/'+GMAX+'</span></span><span style="color:var(--accent)">'+(g&&g.id===x.id?'目前':'')+'</span></button>';});
+  if(W.groups.length<5)h+='<button class="menuitem" data-newg="'+esc(id)+'" style="color:var(--text2)">＋ 新增群組並加入</button>';else h+='<div class="menunote">已達 5 組上限</div>';
+  if(g)h+='<button class="menuitem" data-rmg="'+esc(id)+'" style="color:var(--up)">移出自選</button>';
   $('menuHost').innerHTML=h+'</div>';
 }
 function openGroupMenu(gid,btn){
   var g=W.groups.filter(function(x){return x.id===gid;})[0];
   var h='<button class="backdrop" data-close="1" aria-label="關閉選單"></button><div class="menu" style="'+placeMenu(btn,220)+';width:220px">';
   h+='<div class="menuhd">'+esc(g.name)+'</div>';
-  h+='<button class="menuitem" data-gdel="'+gid+'" style="color:var(--up)">刪除群組</button>';
+  h+='<button class="menuitem" data-gdel="'+esc(gid)+'" style="color:var(--up)">刪除群組</button>';
   h+='<div class="menunote">改名：點群組標題旁的鉛筆。顏色依建立順序自動指定。</div>';
   $('menuHost').innerHTML=h+'</div>';
 }
 function confirmDelete(gid){
   var g=W.groups.filter(function(x){return x.id===gid;})[0];
-  var h='<button class="backdrop" data-close="1" aria-label="取消"></button><div class="modal" role="dialog" aria-label="確認刪除群組"><h2>刪除「'+esc(g.name)+'」？</h2><p style="color:var(--text2);line-height:1.6">'+(g.ids.length?'將移出 '+g.ids.length+' 家公司。這些公司的新聞關鍵字與報告設定會保存在後端，但從設定頁移除。':'此群組沒有公司。')+(W.groups.length===1?'<br>這是最後一個群組，刪除後會保留一個空的「自選1」。':'')+'</p><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" data-close="1">取消</button><button class="btn primary" data-gdelok="'+gid+'">刪除</button></div></div>';
+  var h='<button class="backdrop" data-close="1" aria-label="取消"></button><div class="modal" role="dialog" aria-label="確認刪除群組"><h2>刪除「'+esc(g.name)+'」？</h2><p style="color:var(--text2);line-height:1.6">'+(g.ids.length?'將移出 '+g.ids.length+' 家公司。這些公司的新聞關鍵字與報告設定會保存在後端，但從設定頁移除。':'此群組沒有公司。')+(W.groups.length===1?'<br>這是最後一個群組，刪除後會保留一個空的「自選1」。':'')+'</p><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" data-close="1">取消</button><button class="btn primary" data-gdelok="'+esc(gid)+'">刪除</button></div></div>';
   $('menuHost').innerHTML=h;
 }
 function closeMenu(){$('menuHost').innerHTML='';}
@@ -622,24 +651,24 @@ var WFX=[['成交價',234,118],['中心',352,72],['安全邊際',424,78],['隱�
 function wRender(){
   var g=curGroup();
   $('w-title').textContent=g?g.name:'自選';
-  $('w-tabs').innerHTML=W.groups.map(function(x){return '<span class="tab'+(x.id===W.cur?' on':'')+'"><button class="tabmore" style="display:inline-flex;gap:8px;align-items:center;color:inherit" role="tab" aria-selected="'+(x.id===W.cur)+'" data-tab="'+x.id+'"><span class="dot" style="background:'+x.color+'"></span>'+esc(x.name)+' <span style="color:var(--faint)">'+x.ids.length+'</span></button><button class="tabmore" data-gmenu="'+x.id+'" aria-label="'+esc(x.name)+' 群組選單">⋯</button></span>';}).join('')+(W.groups.length<5?'<button class="tab" data-addtab="1" aria-label="新增群組">＋</button>':'');
+  $('w-tabs').innerHTML=W.groups.map(function(x){return '<span class="tab'+(x.id===W.cur?' on':'')+'"><button class="tabmore" style="display:inline-flex;gap:8px;align-items:center;color:inherit" role="tab" aria-selected="'+(x.id===W.cur)+'" data-tab="'+esc(x.id)+'"><span class="dot" style="background:'+x.color+'"></span>'+esc(x.name)+' <span style="color:var(--faint)">'+x.ids.length+'</span></button><button class="tabmore" data-gmenu="'+esc(x.id)+'" aria-label="'+esc(x.name)+' 群組選單">⋯</button></span>';}).join('')+(W.groups.length<5?'<button class="tab" data-addtab="1" aria-label="新增群組">＋</button>':'');
   var hh='<th class="fz" style="left:0;width:28px;min-width:28px"></th><th class="fz" style="left:28px;width:56px;min-width:56px">代號</th><th class="fz" style="left:84px;width:150px;min-width:150px;border-right:1px solid var(--line2)">公司</th>';
   WFX.forEach(function(c,i){hh+='<th class="fz" style="left:'+c[1]+'px;width:'+c[2]+'px;min-width:'+c[2]+'px;text-align:right'+(i===3?';border-right:2px solid #3A4149':'')+'">'+c[0]+'</th>';});
   ['下限','上限','數據上限'].forEach(function(l,i){hh+='<th class="vgrp'+(i===0?' first':'')+'"'+(i===2?' style="border-right:2px solid #3A4149"':'')+'>'+l+'</th>';});
-  MAJ.forEach(function(l,k){hh+='<th class="shd">'+l+'</th>';});
+  MAJ.forEach(function(l,k){hh+='<th class="shd">'+esc(l)+'</th>';});
   hh+='<th class="jr" style="right:194px;width:150px;min-width:150px;border-left:1px solid var(--line2);text-align:center">近 20 日</th><th class="jr" style="right:44px;width:150px;min-width:150px;text-align:center">近 5 月營收</th><th class="jr" style="right:0;width:44px;min-width:44px;text-align:center">自選</th>';
   $('w-head').innerHTML=hh;
   var b='';
   (g?g.ids:[]).forEach(function(id){
     var r=BYID[id];if(!r)return;var o=sim(id),mg=margin(o),over=o.cap!=null&&o.price!=null&&o.price>o.cap;
-    var gg=groupOf(id);
-    b+='<tr id="wr-'+id+'" class="'+(r.rank==null?'nd':'')+(WS.sel===id?' sel':'')+'" data-row="'+id+'" draggable="true">';
-    b+='<td class="fz" style="left:0;padding:0"><span class="handle" aria-hidden="true" title="拖曳調整順序">⋮⋮</span></td><td class="fz mono" style="left:28px"><button class="selbtn" data-wsel="'+id+'" aria-label="標示此列">'+id+'</button></td>';
-    b+='<td class="fz" style="left:84px;border-right:1px solid var(--line2)"><button class="namelink" data-open="'+id+'"><span class="nm">'+esc(r.name)+'</span></button><span style="color:var(--faint);font-size:11px;margin-left:6px">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+r.rank)+'</span>'+pcMark(r)+' '+badges(r)+'</td>';
+    var gg=groupOf(id),eid=esc(id);
+    b+='<tr id="wr-'+eid+'" class="'+(r.rank==null?'nd':'')+(WS.sel===id?' sel':'')+'" data-row="'+eid+'" draggable="true">';
+    b+='<td class="fz" style="left:0;padding:0"><span class="handle" aria-hidden="true" title="拖曳調整順序">⋮⋮</span></td><td class="fz mono" style="left:28px"><button class="selbtn" data-wsel="'+eid+'" aria-label="標示此列">'+eid+'</button></td>';
+    b+='<td class="fz" style="left:84px;border-right:1px solid var(--line2)"><button class="namelink" data-open="'+eid+'"><span class="nm">'+esc(r.name)+'</span></button><span style="color:var(--faint);font-size:11px;margin-left:6px">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+esc(r.rank))+'</span>'+pcMark(r)+' '+badges(r)+'</td>';
     b+='<td class="fz num'+(EX.stale?' stale':'')+'" style="left:'+WFX[0][1]+'px">'+pxHtml(o)+'</td><td class="fz num" style="left:'+WFX[1][1]+'px">'+fmt(o.typ)+'</td><td class="fz num'+(EX.stale?' stale':'')+'" style="left:'+WFX[2][1]+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td><td class="fz num" style="left:'+WFX[3][1]+'px;border-right:2px solid #3A4149">'+gnHtml(o)+'</td>';
     b+='<td class="vgrp first num">'+fmt(o.min)+'</td><td class="vgrp num">'+fmt(o.max)+'</td><td class="vgrp num'+(over?' over':'')+'" style="border-right:2px solid #3A4149">'+fmt(o.cap)+'</td>';
     r.maj.forEach(function(m){b+=scoreCell(m,false,'');});
-    b+='<td class="jr" style="right:194px;border-left:1px solid var(--line2);text-align:center" data-spark="'+id+'">'+spark(id)+'</td><td class="jr" style="right:44px;text-align:center" data-rev="'+id+'">'+revBars(id)+'</td><td class="jr" style="right:0;text-align:center"><button class="addbtn on" data-menu="'+id+'" aria-label="管理自選群組（目前 '+esc(gg?gg.name:'')+'）"><span class="dot" style="background:'+(gg?gg.color:'')+'"></span></button></td></tr>';
+    b+='<td class="jr" style="right:194px;border-left:1px solid var(--line2);text-align:center" data-spark="'+eid+'">'+spark(id)+'</td><td class="jr" style="right:44px;text-align:center" data-rev="'+eid+'">'+revBars(id)+'</td><td class="jr" style="right:0;text-align:center"><button class="addbtn on" data-menu="'+eid+'" aria-label="管理自選群組（目前 '+esc(gg?gg.name:'')+'）"><span class="dot" style="background:'+(gg?gg.color:'')+'"></span></button></td></tr>';
   });
   if(!g||!g.ids.length)b='<tr><td colspan="30" style="text-align:left;color:var(--faint);padding:16px">此群組還沒有公司。到首頁點「＋」加入。</td></tr>';
   $('w-body').innerHTML=b;
@@ -648,9 +677,9 @@ function wRender(){
   if(isM()){
     var ids=g?g.ids:[];
     $('w-mlist').innerHTML=ids.length?ids.map(function(id,ix){
-      var r=BYID[id],o=sim(id),mg=margin(o),open=!!MX.open['w'+id];
-      var acts='<div style="display:flex;gap:10px;align-items:center">'+spark(id)+revBars(id)+'</div><div class="mact"><a class="btn" href="#/stock/'+id+'/'+encodeURIComponent('watch:'+W.cur)+'">個股分析</a><button class="btn" data-wmove="'+id+'|-1"'+(ix===0?' disabled':'')+'>上移</button><button class="btn" data-wmove="'+id+'|1"'+(ix===ids.length-1?' disabled':'')+'>下移</button><button class="btn" data-menu="'+id+'">群組／移出</button></div>';
-      return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+'"><button class="mhead" data-wexp="'+id+'" aria-expanded="'+open+'"><span class="mrk num">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+r.rank)+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+pcMark(r)+badges(r)+'</span><span class="l2">'+esc(id)+'｜'+esc(r.ind)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'">'+pxHtml(o)+'</span><span class="mmg num" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+(open?mDetail(r,acts):'')+'</div>';
+      var r=BYID[id],o=sim(id),mg=margin(o),open=!!MX.open['w'+id],eid=esc(id);
+      var acts='<div style="display:flex;gap:10px;align-items:center">'+spark(id)+revBars(id)+'</div><div class="mact"><a class="btn" href="#/stock/'+eid+'/'+encodeURIComponent('watch:'+W.cur)+'">個股分析</a><button class="btn" data-wmove="'+eid+'|-1"'+(ix===0?' disabled':'')+'>上移</button><button class="btn" data-wmove="'+eid+'|1"'+(ix===ids.length-1?' disabled':'')+'>下移</button><button class="btn" data-menu="'+eid+'">群組／移出</button></div>';
+      return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+'"><button class="mhead" data-wexp="'+eid+'" aria-expanded="'+open+'"><span class="mrk num">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+esc(r.rank))+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+pcMark(r)+badges(r)+'</span><span class="l2">'+esc(id)+'｜'+esc(r.ind)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'">'+pxHtml(o)+'</span><span class="mmg num" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+(open?mDetail(r,acts):'')+'</div>';
     }).join(''):'<div class="placeholder" style="padding:16px">此群組還沒有公司。到首頁點「＋」加入。</div>';
   }else $('w-mlist').innerHTML='';
 }
@@ -678,8 +707,8 @@ function peerI4(p,first){
   var st=first?' style="margin-left:0"':'';
   if(!p||!p.has)return '<span class="peer ins"'+st+'>同業名次尚未提供</span>';
   switch(p.status){
-    case 'RANKED':return '<span class="peer"'+st+' title="'+esc((p.group||'')+'｜PG002')+'">同業名次 '+p.rank+'／'+p.pop+'</span>';
-    case 'INSUFFICIENT_PEERS':return '<span class="peer ins"'+st+'>同業不足（'+(p.pop==null?'—':p.pop)+' 家）</span>';
+    case 'RANKED':return '<span class="peer"'+st+' title="'+esc((p.group||'')+'｜PG002')+'">同業名次 '+esc(p.rank)+'／'+esc(p.pop)+'</span>';
+    case 'INSUFFICIENT_PEERS':return '<span class="peer ins"'+st+'>同業不足（'+(p.pop==null?'—':esc(p.pop))+' 家）</span>';
     case 'INDUSTRY_UNAVAILABLE':return '<span class="peer ins"'+st+'>產業資料不可得</span>';
     case 'DIAGNOSTIC_NOT_RANKED':return '<span class="peer ins"'+st+'>診斷項不排名</span>';
     case 'SOURCE_STATUS_NOT_RANKED':return '';
@@ -691,7 +720,7 @@ function treeNote(n,lv,key,C){
   if(lv===1){
     var f=C.majors[n.id]||{},k=MJ.map(function(m){return m.id;}).indexOf(n.id),mr=f.market_rank,pop=f.market_rank_population!=null?f.market_rank_population:H.rank_population[k];
     var below=f.inherited_triggered_count||0;
-    var line=(mr!=null?'全市場名次 '+mr+'／'+pop:'全市場名次 —')+peerI4(n.peer)+(below?'<span class="below" title="下層觸發來源項目數（以項目去重，不是獨立事件數）">下層 '+below+' 項觸發</span>':'');
+    var line=(mr!=null?'全市場名次 '+esc(mr)+'／'+esc(pop):'全市場名次 —')+peerI4(n.peer)+(below?'<span class="below" title="下層觸發來源項目數（以項目去重，不是獨立事件數）">下層 '+esc(below)+' 項觸發</span>':'');
     parts.push(line);
     if(STATUS[n.st])parts.push('<span class="ev">'+esc(STATUS[n.st])+'</span>');
   }else{
@@ -706,15 +735,15 @@ function treeNote(n,lv,key,C){
   if(src&&src.length)parts.push(src.map(function(x){return '<span class="gt">'+noteHtml(x)+'</span>';}).join('<br>'));
   var rd=C.readyBy[n.id];
   if(rd&&rd.length){
-    if(SP.rd[key])parts.push('<button class="rdtog" data-rd="'+key+'">收合準備度備註</button><br><span class="muted">'+rd.map(noteHtml).join('<br>')+'</span>');
-    else parts.push('<button class="rdtog" data-rd="'+key+'">Gate 準備度備註 '+rd.length+' 筆（未觸發）</button>');
+    if(SP.rd[key])parts.push('<button class="rdtog" data-rd="'+esc(key)+'">收合準備度備註</button><br><span class="muted">'+rd.map(noteHtml).join('<br>')+'</span>');
+    else parts.push('<button class="rdtog" data-rd="'+esc(key)+'">Gate 準備度備註 '+rd.length+' 筆（未觸發）</button>');
   }
   return parts.join('<br>')||'<span class="muted">—</span>';
 }
 function itemCell(n,lv,key,k){
   var pad=lv===1?10:(lv===2?28:52);
   var label='<span class="'+(lv===1?'en1':'')+'">'+esc(n.en||n.id)+'</span><span class="zh">'+esc(n.zh||'')+'</span>'+(lv===1&&n.p&&n.p===H.annual_period&&n.p!==H.requested_period?'<span class="per">'+esc(n.p)+' 年報</span>':'')+(lv>1&&n.w?'<span class="per">×'+(+n.w).toFixed(2)+'</span>':'');
-  if(n.c&&n.c.length&&lv<3){var open=!!SP.open[key];return '<td class="c1" style="padding-left:'+pad+'px" title="'+esc(n.id)+'"><button class="tog" data-tog="'+key+'" aria-expanded="'+open+'"><span class="caret">'+(open?'▼':'▶')+'</span><span>'+label+'</span></button></td>';}
+  if(n.c&&n.c.length&&lv<3){var open=!!SP.open[key];return '<td class="c1" style="padding-left:'+pad+'px" title="'+esc(n.id)+'"><button class="tog" data-tog="'+esc(key)+'" aria-expanded="'+open+'"><span class="caret">'+(open?'▼':'▶')+'</span><span>'+label+'</span></button></td>';}
   return '<td class="c1" style="padding-left:'+(pad+18)+'px" title="'+esc(n.id)+'">'+label+'</td>';
 }
 /* E1b：第二階段處置一行 */
@@ -747,7 +776,7 @@ function sRender(){
   var id=SP.id,r=BYID[id];if(!r){$('s-title').textContent='找不到公司 '+id;$('s-sub').textContent='';$('s-p2').textContent='';$('s-tree').innerHTML='';return;}
   var C=COMP[id]||null;
   $('s-title').innerHTML=esc(r.id+' '+r.name)+' '+dotFor(r.id)+' '+badges(r,C);
-  $('s-sub').innerHTML=esc(r.ind)+'｜總名次 '+rankTxt(r)+pcMark(r)+'｜分析財報 '+(r.assessed?(r.period||H.requested_period||'—'):'—');
+  $('s-sub').innerHTML=esc(r.ind)+'｜總名次 '+rankTxt(r)+pcMark(r)+'｜分析財報 '+(r.assessed?esc(r.period||H.requested_period||'—'):'—');
   $('s-p2').innerHTML=p2Line(r,C);
   var list=srcList(),i=list.indexOf(id);
   $('s-prev').disabled=i<=0;$('s-next').disabled=i<0||i>=list.length-1;
@@ -769,7 +798,7 @@ function sRender(){
   }else{
     /* I3：中小項明細未交付時只列 12 大項 */
     r.maj.forEach(function(m,k){
-      b+='<tr class="lv1"><td class="c1" style="padding-left:28px"><span class="en1">'+esc(MJ[k].en)+'</span></td><td class="c2">'+treeScore(m)+'</td><td class="c3 note">'+(m.mr!=null?'全市場名次 '+m.mr+'／'+H.rank_population[k]:'<span class="ev">'+esc(STATUS[m.st]||m.st)+'</span>')+'</td></tr>';
+      b+='<tr class="lv1"><td class="c1" style="padding-left:28px"><span class="en1">'+esc(MJ[k].en)+'</span></td><td class="c2">'+treeScore(m)+'</td><td class="c3 note">'+(m.mr!=null?'全市場名次 '+esc(m.mr)+'／'+esc(H.rank_population[k]):'<span class="ev">'+esc(STATUS[m.st]||m.st)+'</span>')+'</td></tr>';
     });
     b+='<tr><td colspan="3" class="placeholder">中小項明細尚未提供。</td></tr>';
   }
@@ -834,7 +863,7 @@ function nRender(kw){
   $('n-title').textContent=isStock?'個股新聞':'產業新聞';
   var opts=isStock?watchIds().map(function(id){return ['s'+id,id+' '+BYID[id].name];}):NS.groups.map(function(g,i){return ['g'+g.id,(i+1)+'｜'+(g.kw[0]||'（未設定）')];});
   if(isStock&&opts.every(function(o){return o[0]!==NP.kw;})){var rid=NP.kw.slice(1);opts.unshift([NP.kw,rid+' '+(BYID[rid]?BYID[rid].name:'')+'（未追蹤）']);}
-  $('n-kw').innerHTML=opts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===NP.kw?' selected':'')+'>'+esc(o[1])+'</option>';}).join('')||'<option>（尚未設定）</option>';
+  $('n-kw').innerHTML=opts.map(function(o){return '<option value="'+esc(o[0])+'"'+(o[0]===NP.kw?' selected':'')+'>'+esc(o[1])+'</option>';}).join('')||'<option>（尚未設定）</option>';
   var days=[],now=new Date();for(var i=0;i<5;i++){var d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i);days.push((d.getMonth()+1)+'/'+d.getDate());}
   var keep=$('n-date').dataset.kw===NP.kw?$('n-date').value:'0';$('n-date').dataset.kw=NP.kw;
   $('n-date').innerHTML=days.map(function(d,i){return '<option value="'+i+'">'+d+(i===0?'（當日）':'')+'</option>';}).join('');$('n-date').value=keep||'0';
@@ -852,16 +881,16 @@ $('n-date').addEventListener('change',function(){nRange();});
 $('n-kw').addEventListener('change',function(){location.hash='#/news/'+$('n-kw').value;});
 /* ================= NEWS SETTINGS ================= */
 function chipBox(arr,kind,key,max,placeholder){
-  return '<div class="chips'+(kind==='ex'?' ex':'')+'">'+arr.map(function(k,i){return '<span class="chip">'+esc(k)+'<button aria-label="移除 '+esc(k)+'" data-chiprm="'+kind+'|'+key+'|'+i+'">×</button></span>';}).join('')+
-   (arr.length<max?'<input aria-label="'+esc(placeholder)+'" placeholder="'+esc(placeholder)+'" data-chipadd="'+kind+'|'+key+'">':'<span style="font-size:11px;color:var(--faint)">已達 '+max+' 個</span>')+'</div>';
+  return '<div class="chips'+(kind==='ex'?' ex':'')+'">'+arr.map(function(k,i){return '<span class="chip">'+esc(k)+'<button aria-label="移除 '+esc(k)+'" data-chiprm="'+esc(kind+'|'+key+'|'+i)+'">×</button></span>';}).join('')+
+   (arr.length<max?'<input aria-label="'+esc(placeholder)+'" placeholder="'+esc(placeholder)+'" data-chipadd="'+esc(kind+'|'+key)+'">':'<span style="font-size:11px;color:var(--faint)">已達 '+max+' 個</span>')+'</div>';
 }
 function nsRender(){
   $('ns-span').innerHTML=[1,3].map(function(v){return '<button data-nsdef="'+v+'" class="'+((NS.span||1)===v?'on':'')+'" aria-pressed="'+((NS.span||1)===v)+'">'+v+' 天</button>';}).join('');
   $('ns-groups').innerHTML=NS.groups.map(function(g,i){
-    return '<div class="kwrow"><span class="mono">'+(i+1)+'</span>'+chipBox(g.kw,'kw','g'+g.id,5,'輸入關鍵字後按 Enter')+chipBox(g.ex,'ex','g'+g.id,5,'排除字（選填）')+'<span style="display:flex;gap:6px"><button class="btn sm" data-nssave="1">儲存</button><button class="xbtn" data-nsdel="'+g.id+'" aria-label="刪除第 '+(i+1)+' 組">✕</button></span></div>';
+    return '<div class="kwrow"><span class="mono">'+(i+1)+'</span>'+chipBox(g.kw,'kw','g'+g.id,5,'輸入關鍵字後按 Enter')+chipBox(g.ex,'ex','g'+g.id,5,'排除字（選填）')+'<span style="display:flex;gap:6px"><button class="btn sm" data-nssave="1">儲存</button><button class="xbtn" data-nsdel="'+esc(g.id)+'" aria-label="刪除第 '+(i+1)+' 組">✕</button></span></div>';
   }).join('')||'<div class="placeholder" style="padding:8px 0">尚未建立關鍵字組。</div>';
   var ids=watchIds();
-  $('ns-stocks').innerHTML=ids.length?ids.map(function(id){var s=stockKw(id);return '<div class="kwrow"><span class="mono">'+id+'</span>'+chipBox(s.kw,'kw','s'+id,5,'輸入關鍵字後按 Enter')+chipBox(s.ex,'ex','s'+id,5,'排除字（選填）')+'<span><button class="btn sm" data-nssave="1">儲存</button></span></div>';}).join(''):'<div class="placeholder">自選群組目前沒有公司。</div>';
+  $('ns-stocks').innerHTML=ids.length?ids.map(function(id){var s=stockKw(id);return '<div class="kwrow"><span class="mono">'+esc(id)+'</span>'+chipBox(s.kw,'kw','s'+id,5,'輸入關鍵字後按 Enter')+chipBox(s.ex,'ex','s'+id,5,'排除字（選填）')+'<span><button class="btn sm" data-nssave="1">儲存</button></span></div>';}).join(''):'<div class="placeholder">自選群組目前沒有公司。</div>';
   $('ns-src').innerHTML='<div class="placeholder">新聞來源待核准（白名單由後端提供，核准後這裡只能停用）。</div>';
 }
 function chipTarget(key){if(key.charAt(0)==='g')return NS.groups.filter(function(g){return 'g'+g.id===key;})[0];return stockKw(key.slice(1));}
@@ -896,18 +925,18 @@ document.addEventListener('click',function(e){
 });
 function rsRender(){
   var ids=watchIds();if(ids.indexOf(RP.id)<0)RP.id=ids[0]||null;
-  $('rs-list').innerHTML=ids.map(function(id){var s=rsGet(id);return '<button class="'+(id===RP.id?'on':'')+'" data-rspick="'+id+'"><span>'+id+' '+esc(BYID[id].name)+'</span><span style="color:var(--faint);font-size:11px">'+(s.time?'排程 '+esc(s.time.slice(5).replace('-','/').replace('T',' ')):'手動')+'</span></button>';}).join('')||'<div class="placeholder">自選群組目前沒有公司。</div>';
+  $('rs-list').innerHTML=ids.map(function(id){var s=rsGet(id);return '<button class="'+(id===RP.id?'on':'')+'" data-rspick="'+esc(id)+'"><span>'+esc(id)+' '+esc(BYID[id].name)+'</span><span style="color:var(--faint);font-size:11px">'+(s.time?'排程 '+esc(s.time.slice(5).replace('-','/').replace('T',' ')):'手動')+'</span></button>';}).join('')||'<div class="placeholder">自選群組目前沒有公司。</div>';
   if(!RP.id){$('rs-panel').innerHTML='<div class="placeholder">請先把公司加入自選群組。</div>';return;}
   var s=rsGet(RP.id),r=BYID[RP.id];
-  var h='<div style="display:flex;align-items:center;gap:10px"><h2>'+r.id+' '+esc(r.name)+'</h2><span class="grow"></span><span id="rs-genbox"><button class="btn primary" disabled title="報告流程契約交付後開放">產生報告（尚未開放）</button></span></div><div class="sub" id="rs-reqstate"></div>';
+  var h='<div style="display:flex;align-items:center;gap:10px"><h2>'+esc(r.id)+' '+esc(r.name)+'</h2><span class="grow"></span><span id="rs-genbox"><button class="btn primary" disabled title="報告流程契約交付後開放">產生報告（尚未開放）</button></span></div><div class="sub" id="rs-reqstate"></div>';
   h+='<div class="field"><label class="k">報告關鍵字（最多 10 個，預設帶入個股新聞關鍵字；產業背景每份最多收 10 則）</label>'+chipBox(s.kw,'kw','r'+RP.id,10,'輸入後按 Enter')+'</div>';
   var sd=s.time?s.time.slice(0,10):'',st=s.time?s.time.slice(11,16):'08:00',topt='';
   for(var hh2=0;hh2<24;hh2++)for(var mm=0;mm<60;mm+=30){var tv=String(hh2).padStart(2,'0')+':'+(mm?'30':'00');topt+='<option value="'+tv+'"'+(tv===st?' selected':'')+'>'+tv+'</option>';}
   h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">排程時間（選填；不設定則只能手動產生）</span><div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+calHtml(sd)+
     '<div style="display:flex;flex-direction:column;gap:8px"><span style="font-size:12px;color:var(--text2)">'+(sd?'已選 '+esc(sd.replace(/-/g,'/'))+'（'+'日一二三四五六'.charAt(new Date(sd+'T00:00').getDay())+'）':'尚未選日期')+'</span><label class="sr" for="rs-tm">時間</label><select class="inp" id="rs-tm"'+(sd?'':' disabled')+'>'+topt+'</select>'+(s.time?'<button class="btn sm" data-rsclear="1" style="align-self:flex-start">清除排程</button>':'')+'</div></div>'+(s.status?'<div class="sub">排程狀態：'+esc({SCHEDULED:'已排程',PAUSED:'暫停（已移出自選）',EXPIRED:'已過期，未補跑',CANCELLED:'已取消',DONE:'已完成',FAILED:'失敗'}[s.status]||s.status)+'</div>':'')+'</div>';
   h+='<div class="field"><label class="chk"><input type="checkbox" id="rs-news"'+(s.news?' checked':'')+'>納入個股新聞</label><label class="chk"><input type="checkbox" id="rs-cmp"'+(s.cmp?' checked':'')+'>與上一期比較</label></div>';
-  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">重點大項（選填，報告會優先解讀）</span><div class="srcgrid">'+MAJ.map(function(l,k){return '<label class="chk"><input type="checkbox" data-focus="'+MJ[k].id+'"'+(s.focus.indexOf(MJ[k].id)>=0?' checked':'')+'>'+l+'</label>';}).join('')+'</div></div>';
-  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">參考資料（reports/'+r.id+'/inputs/）</span><div id="rs-inputs"><div class="placeholder">上傳、列檔與移除端點交付後開放。</div><button class="btn sm" style="align-self:flex-start" disabled>加入檔案（尚未開放）</button></div></div>';
+  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">重點大項（選填，報告會優先解讀）</span><div class="srcgrid">'+MAJ.map(function(l,k){return '<label class="chk"><input type="checkbox" data-focus="'+esc(MJ[k].id)+'"'+(s.focus.indexOf(MJ[k].id)>=0?' checked':'')+'>'+esc(l)+'</label>';}).join('')+'</div></div>';
+  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">參考資料（reports/'+esc(r.id)+'/inputs/）</span><div id="rs-inputs"><div class="placeholder">上傳、列檔與移除端點交付後開放。</div><button class="btn sm" style="align-self:flex-start" disabled>加入檔案（尚未開放）</button></div></div>';
   h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">歷次報告</span><div id="rs-history"><div class="placeholder">尚無報告。</div></div></div>';
   h+='<div class="placeholder">新的分析期別完成或加入參考資料時，只會提示「有新資料，是否重新產生」，不會自動產生。移出自選時暫停排程、保留報告與設定；再次加入時恢復，不補跑過期排程。</div>';
   $('rs-panel').innerHTML=h;

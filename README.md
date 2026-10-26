@@ -27,6 +27,7 @@ UI 不重算任何分數、名次或 Gate；後端沒有的資料（估價、第
 
 - `tests/e2e_pages.mjs`：對線上 Workers 資料跑完整 UI（首頁、個股、自選、各設定頁、狀態、說明、帳號視窗、手機寬度），18 項。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages.mjs`
 - `tests/e2e_pages_account.mjs`：用假的帳號端點測邀請碼欄位（依 `/api/auth/config`）與改密碼，6 項；不建立真實帳號。需 `ENVFILE`（同下）。
+- `tests/e2e_pages_xss.mjs`：在 `localStorage` 預先放入惡意或結構錯誤的 `kupei3_watch`／`kupei3_news`／`kupei3_report`（模擬被改寫的雲端文件）後載入各頁，確認注入的程式沒有執行、不合格的群組與欄位被丟棄、頁面仍正常顯示，8 項；不需登入。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages_xss.mjs`
 - `tests/e2e_pages_sync.mjs`：用假的帳號與雲端文件端點測同步邏輯（跨裝置、版本衝突、舊寫入權杖、登出），7 項；不建立真實帳號。需 `ENVFILE=<.env.local 完整路徑>`（資料請求改帶唯讀權杖，只在記憶體使用）。
 
 ## 部署
