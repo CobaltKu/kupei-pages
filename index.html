@@ -18,18 +18,46 @@
   <input id="q" type="search" placeholder="搜尋代號、名稱或產業" aria-label="搜尋">
   <label class="chk"><input id="only-watch" type="checkbox"> 只看自選</label>
   <span id="count" class="count"></span>
-  <details id="settings" class="settings">
-    <summary><span id="sync-state" class="sync">雲端同步：未設定</span></summary>
-    <div class="settings-body">
-      <p>貼上<b>寫入權杖</b>（由維護者另外提供，只存在這台裝置），自選就會存到雲端、換裝置同步。沒有也能用，只是自選只存在這個瀏覽器。</p>
-      <div class="row">
-        <input id="write-token" type="password" placeholder="寫入權杖" autocomplete="off" spellcheck="false">
-        <button id="token-save" type="button">連線</button>
-        <button id="token-clear" type="button" class="ghost">清除</button>
+  <div class="account">
+    <details id="settings" class="settings">
+      <summary><span id="sync-state" class="sync">登入</span></summary>
+      <div class="settings-body">
+        <form id="auth-form" class="auth" novalidate>
+          <div class="seg" role="group" aria-label="登入或建立帳號">
+            <button type="button" id="mode-login" aria-pressed="true">登入</button>
+            <button type="button" id="mode-register" aria-pressed="false">建立帳號</button>
+          </div>
+          <p class="muted">登入後自選跟著帳號走，換裝置登入同一個帳號就同步。不登入也能看評分，自選只存在這個瀏覽器。</p>
+          <label for="auth-user">帳號</label>
+          <input id="auth-user" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" required aria-describedby="auth-user-hint">
+          <small id="auth-user-hint" class="muted">3～32 字，小寫英文、數字與 _ . -，開頭要英數</small>
+          <label for="auth-pass">密碼</label>
+          <input id="auth-pass" name="password" type="password" autocomplete="current-password" maxlength="128" required aria-describedby="auth-pass-hint">
+          <small id="auth-pass-hint" class="muted">8～128 字</small>
+          <div id="auth-confirm" class="field" hidden>
+            <label for="auth-pass2">再輸入一次密碼</label>
+            <input id="auth-pass2" name="password2" type="password" autocomplete="new-password" maxlength="128">
+          </div>
+          <p id="auth-err" class="err" aria-live="assertive"></p>
+          <button type="submit" id="auth-submit">登入</button>
+        </form>
+        <div id="account-in" hidden>
+          <p>已登入 <b id="account-name"></b>，自選跟著帳號同步。</p>
+        </div>
+        <p id="sync-msg" class="muted" aria-live="polite"></p>
+        <details id="advanced" class="advanced">
+          <summary>進階：使用寫入權杖</summary>
+          <p>貼上<b>寫入權杖</b>（由維護者另外提供，只存在這台裝置），自選就會存到寫入權杖的那份雲端文件。登入帳號時以帳號為準；兩者的資料彼此分開。</p>
+          <div class="row">
+            <input id="write-token" type="password" placeholder="寫入權杖" autocomplete="off" spellcheck="false" aria-label="寫入權杖">
+            <button id="token-save" type="button">連線</button>
+            <button id="token-clear" type="button" class="ghost">清除</button>
+          </div>
+        </details>
       </div>
-      <p id="sync-msg" class="muted"></p>
-    </div>
-  </details>
+    </details>
+    <button id="logout" type="button" class="ghost small" hidden>登出</button>
+  </div>
 </div>
 <div class="wrap"><table id="tbl"><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
 <script type="module" src="/src/main.ts"></script>

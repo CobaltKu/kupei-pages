@@ -6,7 +6,10 @@
 //   3. 行情與評分資料彼此獨立，preload() 同時起跑，不要一個等一個。
 //   4. /api 有每分鐘 30 次限流：latest 在記憶體留 60 秒並共用進行中的請求；history 同一個 tick 的呼叫合併成一次。
 //   5. 429 依 Retry-After 自動重試一次（只限 GET）；每個請求 20 秒逾時。
-//   6. 雲端文件（store）：整包 JSON＋版本號；update() 讀改寫並自動處理 409。寫入權杖由使用者在 App 輸入。
+//   6. 雲端文件（store）：整包 JSON＋版本號；update() 讀改寫並自動處理 409。
+//   7. 使用者帳號：auth.register／login 拿登入權杖（存在 storage key kupei:session），之後所有請求都用它，
+//      雲端文件依帳號分開存。權杖優先順序：登入權杖 ＞ 寫入權杖 ＞ 建置時的唯讀權杖。
+//      用登入權杖時收到 401 UNAUTHENTICATED（過期、在別處登出、帳號被停用）→ 自動清掉 session，前端回到未登入。
 //
 // 用法：
 //   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE, token: import.meta.env.VITE_KUPEI_TOKEN })
@@ -14,10 +17,14 @@
 //   const ds = await kupei.loadDataset({ onUpdate })     // 可能先回快取的舊批次，換批次時 onUpdate 會再給新的
 //   const latest = await kupei.marketLatest()
 //   const q = quoteOf(latest, '2330')
-//   kupei.setWriteToken(userInput)                       // 設定畫面輸入一次
-//   await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))   // 跨裝置同步
+//   await kupei.auth.register(username, password)        // 或 kupei.auth.login(...)；成功回 { user }
+//   kupei.getSession()                                   // { username, expiresAt } | null，同步、不打網路
+//   await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))   // 跨裝置同步（依帳號）
+//   await kupei.auth.logout()
 import type {
   ApiErrorBody,
+  AuthResponse,
+  AuthUser,
   Company,
   Doc,
   DocMeta,
@@ -30,6 +37,8 @@ import type {
   Quote,
   RawRow,
   RawSummary,
+  SessionInfo,
+  StoredSession,
   Translations,
   TreeNode,
   ValuationParam,
@@ -47,10 +56,12 @@ export interface KupeiConfig {
   writeToken?: string | null
   /** 自訂 fetch（測試時替換） */
   fetch?: typeof fetch
-  /** 記住上次批次與寫入權杖用；預設 localStorage，傳 null 關閉 */
+  /** 記住上次批次、寫入權杖與登入狀態用；預設 localStorage，傳 null 關閉（登入只留在記憶體） */
   storage?: (Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem'>>) | null
   /** 單一請求逾時（毫秒），預設 20000 */
   timeoutMs?: number
+  /** 登入狀態改變時呼叫（登入、登出、權杖失效被清掉）；null ＝ 未登入 */
+  onSessionChange?: (session: SessionInfo | null) => void
 }
 
 // 只用「可擦除」的 TypeScript 語法（不用建構子參數屬性、enum），Node 直接執行 .ts 或任何只去型別的工具都吃得下
@@ -68,7 +79,7 @@ export class KupeiError extends Error {
     this.retryAfter = retryAfter
     this.details = details
   }
-  /** 權杖沒帶或不對 → 請使用者檢查 .env.local */
+  /** 權杖沒帶或不對 → 請使用者檢查 .env.local；登入權杖失效時客戶端已自動登出，請回到登入畫面 */
   get unauthenticated() {
     return this.status === 401
   }
@@ -148,6 +159,7 @@ export function fmtPrice(x: number | null | undefined): string {
 
 const STORAGE_KEY = 'kupei:last-manifest'
 const WRITE_TOKEN_KEY = 'kupei:write-token'
+const SESSION_KEY = 'kupei:session'
 const LATEST_TTL_MS = 60_000
 const HISTORY_BATCH = 30
 
@@ -177,24 +189,60 @@ export function createKupeiClient(cfg: KupeiConfig) {
       /* ignore */
     }
   }
-  const bearer = () => `Bearer ${writeToken || cfg.token}`
+
+  // ── 登入狀態：{ token, username, expiresAt } 存在 storage ──
+  let session: StoredSession | null = null
+  try {
+    const raw = storage?.getItem(SESSION_KEY)
+    const s = raw ? (JSON.parse(raw) as StoredSession) : null
+    if (s && typeof s.token === 'string' && typeof s.username === 'string' && typeof s.expiresAt === 'string') session = s
+  } catch {
+    /* 壞掉的值當作沒登入 */
+  }
+  /** 過期的 session 當作沒有（不打網路），並清掉 */
+  function liveSession(): StoredSession | null {
+    if (session && Date.parse(session.expiresAt) <= Date.now()) setSession(null)
+    return session
+  }
+  function setSession(next: StoredSession | null) {
+    const changed = (session?.token ?? null) !== (next?.token ?? null)
+    session = next
+    try {
+      if (next) storage?.setItem(SESSION_KEY, JSON.stringify(next))
+      else storage?.removeItem?.(SESSION_KEY)
+    } catch {
+      /* ignore */
+    }
+    if (changed) cfg.onSessionChange?.(next ? { username: next.username, expiresAt: next.expiresAt } : null)
+  }
+
+  /** 優先順序：登入權杖 ＞ 寫入權杖 ＞ 建置時的唯讀權杖 */
+  const currentToken = () => liveSession()?.token || writeToken || cfg.token
 
   interface GetOpts {
-    method?: 'GET' | 'PUT' | 'DELETE'
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
     body?: unknown
     cache?: RequestCache
     signal?: AbortSignal
     /** 瀏覽器支援時降低優先序（預先載入用） */
     low?: boolean
     retried?: boolean
+    /** 不帶 Authorization（註冊、登入） */
+    anonymous?: boolean
+    /** 指定要用的權杖（登出時用當下的登入權杖） */
+    token?: string
   }
 
   async function get<T>(path: string, opts: GetOpts = {}): Promise<T> {
     const signals = [AbortSignal.timeout(timeoutMs), ...(opts.signal ? [opts.signal] : [])]
     const signal = typeof AbortSignal.any === 'function' ? AbortSignal.any(signals) : signals[0]
+    const token = opts.anonymous ? null : (opts.token ?? currentToken())
     const init: RequestInit & { priority?: 'low' | 'auto' } = {
       method: opts.method ?? 'GET',
-      headers: { Authorization: bearer(), ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
       cache: opts.cache ?? 'default',
       signal,
     }
@@ -216,6 +264,8 @@ export function createKupeiClient(cfg: KupeiConfig) {
       ra ? Number(ra) : null,
       body?.error.details,
     )
+    // 用登入權杖被拒（過期、在別處登出、帳號停用）→ 清掉 session，前端回到未登入。下一個請求會改用寫入／唯讀權杖
+    if (err.status === 401 && err.code === 'UNAUTHENTICATED' && token && session && token === session.token) setSession(null)
     // 被限流：依伺服器要求等待後重試一次（只限 GET；寫入重送可能撞版本，交給呼叫端）；再失敗就丟出去讓畫面處理
     if (err.rateLimited && !opts.retried && (opts.method ?? 'GET') === 'GET') {
       await new Promise((r) => setTimeout(r, Math.min(err.retryAfter ?? 30, 60) * 1000))
@@ -408,7 +458,7 @@ export function createKupeiClient(cfg: KupeiConfig) {
     /** 行情資料範圍與最近抓取結果（資料新不新用） */
     marketStatus: () => get<MarketStatus>('/api/market/status', { cache: 'no-store' }),
 
-    // ── 雲端文件：前端改的任何資料整包存雲端，跨裝置同步。需要寫入權杖 ──
+    // ── 雲端文件：前端改的任何資料整包存雲端，跨裝置同步。需要登入（或寫入權杖）；登入時依帳號分開 ──
 
     /** 使用者在設定畫面輸入寫入權杖後呼叫；傳 null 清除（登出）。會存在 storage，下次打開不用再輸入 */
     setWriteToken(token: string | null) {
@@ -421,6 +471,50 @@ export function createKupeiClient(cfg: KupeiConfig) {
       }
     },
     hasWriteToken: () => writeToken !== null,
+
+    /** 目前登入的帳號（同步、不打網路）；沒登入或已過期回 null */
+    getSession(): SessionInfo | null {
+      const s = liveSession()
+      return s ? { username: s.username, expiresAt: s.expiresAt } : null
+    },
+
+    // ── 使用者帳號：自己註冊、登入後雲端文件依帳號分開存 ──
+    auth: {
+      /**
+       * 註冊並直接登入。帳號 3～32 字（英數與 _ . -，開頭英數，不分大小寫），密碼 8～128 字。
+       * 錯誤：409 USERNAME_TAKEN、400 BAD_REQUEST、429 RATE_LIMITED（每分鐘 10 次）
+       */
+      async register(username: string, password: string): Promise<{ user: AuthUser }> {
+        const r = await get<AuthResponse>('/api/auth/register', { method: 'POST', body: { username: username.trim(), password }, cache: 'no-store', anonymous: true })
+        setSession({ token: r.token, username: r.user.username, expiresAt: r.expiresAt })
+        return { user: r.user }
+      },
+
+      /** 登入。帳號不存在或密碼錯都是 401 INVALID_CREDENTIALS（同一個訊息） */
+      async login(username: string, password: string): Promise<{ user: AuthUser }> {
+        const r = await get<AuthResponse>('/api/auth/login', { method: 'POST', body: { username: username.trim(), password }, cache: 'no-store', anonymous: true })
+        setSession({ token: r.token, username: r.user.username, expiresAt: r.expiresAt })
+        return { user: r.user }
+      },
+
+      /** 登出：通知後端作廢這個權杖（失敗也沒關係），並清掉本機的 session */
+      async logout(): Promise<void> {
+        const s = session
+        setSession(null)
+        if (!s) return
+        try {
+          await get<{ ok: true }>('/api/auth/logout', { method: 'POST', cache: 'no-store', token: s.token })
+        } catch {
+          /* 已經失效或離線：本機已登出即可 */
+        }
+      },
+
+      /** 向後端確認登入還有效（例如 App 啟動時）。失效會丟 KupeiError 401 並自動清掉 session；沒登入回 null */
+      async me(): Promise<AuthUser | null> {
+        if (!liveSession()) return null
+        return (await get<{ user: AuthUser }>('/api/auth/me', { cache: 'no-store' })).user
+      },
+    },
 
     store: {
       /** 所有文件的 key、版本、大小（不含內容） */

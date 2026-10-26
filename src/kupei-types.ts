@@ -183,3 +183,32 @@ export interface Doc<T = unknown> {
   updatedAt: string | null
   data: T | null
 }
+
+// ── 使用者帳號（/api/auth/*） ──
+
+export interface AuthUser {
+  id: number
+  username: string
+}
+
+/** register／login 的回應。token 只在這裡出現一次，客戶端存在 storage（key kupei:session） */
+export interface AuthResponse {
+  user: AuthUser
+  /** kps_ 開頭的登入權杖，有效 30 天 */
+  token: string
+  /** ISO 8601（UTC） */
+  expiresAt: string
+}
+
+/** 客戶端存在 storage 的登入狀態（key kupei:session） */
+export interface StoredSession {
+  token: string
+  username: string
+  expiresAt: string
+}
+
+/** getSession() 的回傳：不含權杖 */
+export interface SessionInfo {
+  username: string
+  expiresAt: string
+}

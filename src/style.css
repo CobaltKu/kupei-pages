@@ -50,3 +50,35 @@ td.star.on { color: var(--warn); }
 .settings-body button { background: var(--text); color: var(--bg); border: 0; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
 .settings-body button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
 .muted { color: var(--muted); }
+
+/* 帳號登入／註冊（分支 feat/account-login） */
+.account { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.account .settings { margin-left: 0; }
+.settings-body button:disabled { opacity: .6; cursor: progress; }
+.auth { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.auth[hidden] { display: none; }
+.auth label { margin-top: 4px; color: var(--text); }
+.auth input { flex: none; width: 100%; padding: 7px 8px; }
+.auth input[aria-invalid="true"] { border-color: var(--up); }
+.auth small { font-size: 11px; }
+.auth .field { display: flex; flex-direction: column; gap: 4px; }
+.auth .field[hidden] { display: none; }
+.auth button[type="submit"] { margin-top: 4px; padding: 7px 10px; }
+.auth p.muted { margin: 4px 0 2px; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.settings-body .seg button { flex: 1; border-radius: 0; background: transparent; color: var(--muted); }
+.settings-body .seg button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+.err { margin: 4px 0 0; color: var(--up); min-height: 0; }
+.err:empty { display: none; }
+#sync-msg:empty { display: none; }
+#sync-msg { margin: 8px 0 0; }
+.advanced { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.advanced summary { cursor: pointer; color: var(--muted); }
+.advanced[open] summary { margin-bottom: 6px; }
+button.small { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+button.small:hover, .settings-body button.ghost:hover { color: var(--text); }
+@media (max-width: 640px) {
+  .tools { flex-wrap: wrap; row-gap: 6px; }
+  #q { flex: 1 1 100%; }
+  .settings-body input { font-size: 16px; } /* iOS 小於 16px 聚焦時會放大頁面 */
+}
