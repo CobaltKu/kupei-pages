@@ -40,7 +40,8 @@ const client = createKupeiClient({
   token: READ_TOKEN,
   onSessionChange: (s) => {
     renderAcct()
-    if (s) void onLogin()
+    // 登入，或登入權杖失效／登出後改用寫入權杖：都走同一套換帳號判斷（pullAll 比對 owner）
+    if (canSync()) void onLogin()
   },
 })
 
@@ -241,20 +242,37 @@ const syncUser = () => client.getSession()?.username ?? '寫入權杖'
 
 const SYNC: Record<string, string> = { kupei3_watch: 'ui-watch', kupei3_news: 'ui-news', kupei3_report: 'ui-report' }
 const META = 'kupei3_sync'
-interface Meta { user?: string; versions: Record<string, number>; dirty: Record<string, boolean> }
+/**
+ * owner＝本機這三份資料屬於哪個帳號（最後一次同步的帳號；寫入權杖算「寫入權杖」）。登出時不清，
+ * 下次換另一個帳號（或寫入權杖）同步時靠它判斷要不要先把本機資料備份並改用雲端那份。
+ */
+interface Meta { owner?: string; versions: Record<string, number>; dirty: Record<string, boolean> }
 
 function readMeta(): Meta {
   try {
     const v = JSON.parse(localStorage.getItem(META) || 'null')
-    if (v && typeof v === 'object') return { user: v.user, versions: v.versions || {}, dirty: v.dirty || {} }
+    if (v && typeof v === 'object') {
+      const versions = v.versions || {}
+      // 舊版只記 user（登出會清掉）：有 user 就當 owner；沒有但同步過（有版本號）→ 不知道是誰，當成別人的資料
+      const owner = v.owner ?? v.user ?? (Object.keys(versions).length ? '?' : undefined)
+      return { owner, versions, dirty: v.dirty || {} }
+    }
   } catch { /* 壞掉當作沒有 */ }
   return { versions: {}, dirty: {} }
 }
 const writeMeta = (m: Meta) => { try { localStorage.setItem(META, JSON.stringify(m)) } catch { /* ignore */ } }
 const nativeSet = Storage.prototype.setItem
 
+/**
+ * frozen＝畫面已經用舊的本機資料開起來，而同步剛用雲端內容改寫了本機、正要重新載入。
+ * 這段期間畫面送來的寫入是舊內容（會蓋掉剛載入的雲端資料、再被推上去），一律丟掉，也不推送。
+ */
+let frozen = false
+let uiStarted = false
+
 function installHook() {
   Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+    if (this === localStorage && SYNC[k] && frozen) return
     nativeSet.call(this, k, v)
     if (this === localStorage && SYNC[k] && canSync()) {
       const m = readMeta()
@@ -267,23 +285,55 @@ function installHook() {
 }
 
 interface CloudDoc { savedAt: string; value: string }
-const setLocal = (k: string, v: string | null) => (v == null ? localStorage.removeItem(k) : nativeSet.call(localStorage, k, v))
+/** pullAll 改寫本機：畫面已啟動時先凍結，之後由呼叫端重新載入 */
+function setLocal(k: string, v: string | null) {
+  if (uiStarted && !k.endsWith('_conflict') && !k.endsWith('_prev')) frozen = true
+  if (v == null) localStorage.removeItem(k)
+  else nativeSet.call(localStorage, k, v)
+}
+function reloadSoon(msg: string, ms = 600) {
+  frozen = true
+  window.clearTimeout(pushTimer)
+  setSyncMsg(msg)
+  window.setTimeout(() => location.reload(), ms)
+}
 
-/** 登入後或啟動時：以雲端為準合併。回傳本機資料是否被雲端內容改寫 */
-async function pullAll(): Promise<boolean> {
+/** pullAll／pushDirty 一次只跑一個，避免兩邊各自讀寫 meta 互相蓋掉 */
+let chain: Promise<unknown> = Promise.resolve()
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const p = chain.then(fn, fn)
+  chain = p.catch(() => {})
+  return p
+}
+
+/** 登入、換帳號或啟動時：以雲端為準合併。回傳本機資料是否被改寫（畫面要重新載入） */
+const pullAll = () => serial(async (): Promise<boolean> => {
   if (!canSync()) return false
-  const meta = readMeta()
+  const who = syncUser()
+  let meta = readMeta()
   let changed = false
+  if (meta.owner && meta.owner !== who) {
+    // 本機資料是上一個帳號的：備份到 *_prev（覆蓋舊備份）後清空，版本歸零，下面只載入雲端、不上傳
+    for (const lk of Object.keys(SYNC)) {
+      const v = localStorage.getItem(lk)
+      setLocal(lk + '_prev', v)
+      if (v != null) { setLocal(lk, null); changed = true }
+    }
+    meta = { owner: who, versions: {}, dirty: {} }
+    writeMeta(meta) // 先存起來：中途失敗也不會把上一個帳號的資料當成這個帳號的
+  }
   for (const [lk, dk] of Object.entries(SYNC)) {
     const cloud = await client.store.get<CloudDoc>(dk)
+    if (syncUser() !== who) throw new Error('帳號已變更') // 同步途中換了帳號：交給下一次 pullAll
     const local = localStorage.getItem(lk)
     const seen = meta.versions[dk] ?? 0
     if (cloud.version === 0 || !cloud.data) {
       if (local != null) {
+        // 第一次同步（owner 未知）或這個帳號雲端被清空：本機資料帶上去
         const r = await client.store.put(dk, { savedAt: new Date().toISOString(), value: local } as CloudDoc, 0)
         meta.versions[dk] = r.version
         meta.dirty[lk] = false
-      }
+      } else meta.versions[dk] = 0
       continue
     }
     if (cloud.version !== seen) {
@@ -297,24 +347,43 @@ async function pullAll(): Promise<boolean> {
       meta.dirty[lk] = false
     }
   }
-  meta.user = syncUser()
+  meta.owner = who
   writeMeta(meta)
   return changed
-}
+})
 
-async function pushDirty() {
-  if (!canSync()) return
+const putLocal = (dk: string, local: string, base: number) =>
+  client.store.put(dk, { savedAt: new Date().toISOString(), value: local } as CloudDoc, base)
+
+const pushDirty = () => serial(async () => {
+  if (!canSync() || frozen) return
   const meta = readMeta()
+  const who = syncUser()
+  if (meta.owner !== undefined && meta.owner !== who) {
+    // 本機資料屬於別的帳號（例如登入權杖失效後改用寫入權杖）：不推，先走換帳號流程
+    window.setTimeout(() => void onLogin(), 0)
+    return
+  }
   setSyncMsg('同步中…')
   try {
     for (const [lk, dk] of Object.entries(SYNC)) {
       if (!meta.dirty[lk]) continue
+      if (frozen || syncUser() !== who) return // 途中要重新載入或換了帳號：不寫 meta、不再推
       const local = localStorage.getItem(lk)
       if (local == null) { meta.dirty[lk] = false; continue }
       try {
-        const r = await client.store.put(dk, { savedAt: new Date().toISOString(), value: local } as CloudDoc, meta.versions[dk] ?? 0)
+        let r
+        try {
+          r = await putLocal(dk, local, meta.versions[dk] ?? 0)
+        } catch (e) {
+          const doc = e instanceof KupeiError && e.status === 409 ? (e.details as { version?: number; data?: CloudDoc | null } | null) : null
+          if (!(e instanceof KupeiError && e.status === 409) || doc?.data) throw e
+          // 409 但雲端沒有文件（已被刪）：當作雲端版本 0 重新寫一次，只重試這一次
+          r = await putLocal(dk, local, typeof doc?.version === 'number' ? doc.version : 0)
+        }
         meta.versions[dk] = r.version
         meta.dirty[lk] = false
+        meta.owner = who
       } catch (e) {
         if (e instanceof KupeiError && e.status === 409) {
           // 另一台裝置先寫入：雲端為準，本機未同步的內容保留在 *_conflict，重新載入畫面
@@ -325,8 +394,7 @@ async function pushDirty() {
             meta.versions[dk] = doc.version
             meta.dirty[lk] = false
             writeMeta(meta)
-            setSyncMsg('另一台裝置較新，已載入雲端內容')
-            window.setTimeout(() => location.reload(), 800)
+            reloadSoon('另一台裝置較新，已載入雲端內容', 800)
             return
           }
         }
@@ -336,12 +404,13 @@ async function pushDirty() {
     writeMeta(meta)
     setSyncMsg(`已同步 ${new Date().toLocaleTimeString('zh-TW', { hour12: false })}`)
   } catch (e) {
+    if (frozen || syncUser() !== who) return
     writeMeta(meta)
     setSyncMsg(e instanceof KupeiError && e.status === 413 ? '同步失敗：資料太大（單份上限 256 KB）' : '同步失敗，稍後會再試')
     window.clearTimeout(pushTimer)
     pushTimer = window.setTimeout(() => void pushDirty(), 30000)
   }
-}
+})
 
 let booted = false
 async function onLogin() {
@@ -350,9 +419,10 @@ async function onLogin() {
   try {
     const changed = await pullAll()
     setSyncMsg(`已同步 ${new Date().toLocaleTimeString('zh-TW', { hour12: false })}`)
-    if (changed) { setSyncMsg('已載入帳號的雲端資料，重新整理畫面…'); window.setTimeout(() => location.reload(), 600) }
+    if (changed) reloadSoon('已載入帳號的雲端資料，重新整理畫面…')
   } catch (e) {
-    setSyncMsg(e instanceof KupeiError ? `同步失敗（${e.status}）` : '同步失敗')
+    if (frozen) reloadSoon('已載入部分雲端資料，重新整理畫面…') // 本機已被改寫一部分，畫面不能再用舊內容
+    else setSyncMsg(e instanceof KupeiError ? `同步失敗（${e.status}）` : '同步失敗')
   }
 }
 
@@ -474,7 +544,7 @@ document.addEventListener('click', (e) => {
     const v = (document.getElementById('acct-wt') as HTMLInputElement | null)?.value.trim() ?? ''
     if (v) { client.setWriteToken(v); setSyncMsg('連線中…'); void onLogin() }
   } else if (t.closest('[data-acct-wt-clear]')) { client.setWriteToken(null); setSyncMsg('已清除寫入權杖；資料保留在這台瀏覽器'); renderAcct() }
-  else if (t.closest('[data-acct-logout]')) void client.auth.logout().then(() => { const m = readMeta(); m.user = undefined; writeMeta(m); syncMsg = ''; acctOpen = false; renderAcct() })
+  else if (t.closest('[data-acct-logout]')) void client.auth.logout().then(() => { syncMsg = ''; acctOpen = false; renderAcct() }) // meta.owner 保留：下次別的帳號登入時才知道本機資料是誰的
 })
 // <details> 的 toggle 不冒泡，用捕獲階段記住展開狀態（背景同步訊息觸發重畫時才不會被收起來）
 document.addEventListener('toggle', (e) => { const t = e.target as HTMLElement; if (t.id === 'acct-pw-box') pwOpen = (t as HTMLDetailsElement).open }, true)
@@ -494,12 +564,25 @@ async function boot() {
   installHook()
   // 回訪且已登入：先把雲端資料合併進本機（最多等 4 秒），UI 才讀 localStorage
   if (canSync()) {
-    try {
-      await Promise.race([pullAll(), new Promise((_, rej) => window.setTimeout(() => rej(new Error('timeout')), 4000))])
-      setSyncMsg(`已同步 ${new Date().toLocaleTimeString('zh-TW', { hour12: false })}`)
-    } catch { setSyncMsg('同步失敗，使用本機資料') }
+    const pull = pullAll()
+    const late = await Promise.race([
+      pull.then(() => false),
+      new Promise<boolean>((r) => window.setTimeout(() => r(true), 4000)),
+    ]).catch(() => null)
+    if (late === false) setSyncMsg(`已同步 ${new Date().toLocaleTimeString('zh-TW', { hour12: false })}`)
+    else if (late === null) setSyncMsg('同步失敗，使用本機資料')
+    else {
+      // 逾時：畫面先用本機資料開起來。之後 pullAll 一旦改寫本機就凍結寫入（見 setLocal），回來後重新載入，
+      // 避免畫面上的舊內容在重新載入前後被當成新的修改、用新版本號推上去蓋掉別台的變更
+      setSyncMsg('同步較慢，先使用本機資料…')
+      pull.then(
+        (changed) => (changed ? reloadSoon('已載入帳號的雲端資料，重新整理畫面…') : setSyncMsg(`已同步 ${new Date().toLocaleTimeString('zh-TW', { hour12: false })}`)),
+        () => (frozen ? reloadSoon('已載入部分雲端資料，重新整理畫面…') : setSyncMsg('同步失敗，使用本機資料')),
+      )
+    }
   }
   booted = true
+  uiStarted = true
   void loadDs().catch(() => {}) // 與 UI 啟動並行
   void client.marketLatest().catch(() => {})
   const s = document.createElement('script')

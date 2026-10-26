@@ -186,6 +186,14 @@ function versionOf(m: Manifest, name?: BatchName | OptionalBatchName): string {
   return encodeURIComponent((name && m.hashes[name]) || m.published_at)
 }
 
+/** Retry-After 可以是秒數或 HTTP 日期；無效回 null（呼叫端用預設等待時間） */
+function retryAfterSeconds(v: string | null): number | null {
+  if (!v) return null
+  if (/^\s*\d+\s*$/.test(v)) return Number(v)
+  const t = Date.parse(v)
+  return Number.isNaN(t) ? null : Math.max(0, Math.ceil((t - Date.now()) / 1000))
+}
+
 function sameBatch(a: Manifest, b: Manifest): boolean {
   return a.run === b.run && a.published_at === b.published_at && JSON.stringify(a.hashes) === JSON.stringify(b.hashes)
 }
@@ -266,19 +274,20 @@ export function createKupeiClient(cfg: KupeiConfig) {
     if (opts.low) init.priority = 'low'
     const res = await doFetch(base + path, init)
     if (res.ok) return (await res.json()) as T
-    let body: ApiErrorBody | null = null
+    let e: Partial<ApiErrorBody['error']> = {}
     try {
-      body = (await res.json()) as ApiErrorBody
+      const body = await res.json()
+      // 不是 { error: {...} } 形狀的 JSON（例如代理或閘道回的錯誤）也不能讓這裡丟 TypeError
+      if (body && typeof body.error === 'object' && body.error) e = body.error
     } catch {
       /* /data/* 的 401、404 是純文字 */
     }
-    const ra = res.headers.get('Retry-After')
     const err = new KupeiError(
       res.status,
-      body?.error.code ?? (res.status === 401 ? 'UNAUTHENTICATED' : res.status === 404 ? 'NOT_FOUND' : 'HTTP_ERROR'),
-      body?.error.message ?? `${path}：HTTP ${res.status}`,
-      ra ? Number(ra) : null,
-      body?.error.details,
+      typeof e.code === 'string' ? e.code : res.status === 401 ? 'UNAUTHENTICATED' : res.status === 404 ? 'NOT_FOUND' : `HTTP_${res.status}`,
+      typeof e.message === 'string' ? e.message : `${path}：HTTP ${res.status}`,
+      retryAfterSeconds(res.headers.get('Retry-After')),
+      e.details,
     )
     // 用登入權杖被拒（過期、在別處登出、帳號停用）→ 清掉 session，前端回到未登入。下一個請求會改用寫入／唯讀權杖
     if (err.status === 401 && err.code === 'UNAUTHENTICATED' && token && session && token === session.token) setSession(null)
