@@ -5,5 +5,6 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   base: process.env.PAGES_BASE ?? '/',
-  // 其餘設定照你的專案
+  // 讓 app.js 的網址帶建置編號，換版後瀏覽器不會用到舊快取
+  define: { __BUILD__: JSON.stringify(process.env.GITHUB_SHA?.slice(0, 7) ?? Date.now().toString(36)) },
 })

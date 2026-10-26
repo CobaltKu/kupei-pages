@@ -1,0 +1,20 @@
+/* 帳號按鈕與視窗（Pages 版新增；其餘樣式沿用 public/legacy/styles.css） */
+.railbtn[data-acct] { margin-top: auto; }
+.acct-dot { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--down, #2fb36b); }
+.acct-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 80; }
+.acct-modal { position: fixed; z-index: 81; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(380px, 92vw); max-height: 90vh; overflow: auto;
+  background: var(--surface, #16191c); color: var(--text, #e6e8ea); border: 1px solid var(--line2, #30363c); border-radius: 12px; padding: 16px 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+.acct-modal h2 { margin: 0 0 8px; font-size: 16px; }
+.acct-modal p { margin: 6px 0; line-height: 1.6; font-size: 13px; }
+.acct-modal label { display: block; margin: 10px 0 0; font-size: 12px; color: var(--muted, #9aa3ab); }
+.acct-modal input { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; font-size: 14px; color: var(--text, #e6e8ea); background: var(--bg, #101214);
+  border: 1px solid var(--line2, #30363c); border-radius: 8px; }
+.acct-muted { color: var(--muted, #9aa3ab); font-size: 12px !important; }
+.acct-err { min-height: 18px; color: var(--up, #f0524f); font-size: 12px !important; }
+.acct-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.acct-btn { padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; border: 0; border-radius: 8px; background: var(--accent, #e8833a); color: #101214; font-weight: 500; }
+.acct-btn.ghost { background: transparent; color: var(--muted, #9aa3ab); border: 1px solid var(--line2, #30363c); }
+@media (max-width: 760px) { .railbtn[data-acct] { margin-top: 0; } .acct-dot { top: 6px; right: 10px; } }
+.acct-adv { margin-top: 14px; border-top: 1px solid var(--line, #24292e); padding-top: 8px; }
+.acct-adv summary { cursor: pointer; font-size: 12px; color: var(--muted, #9aa3ab); }
+.acct-adv input { margin-top: 6px; }
