@@ -2,7 +2,9 @@
  * KuPei Pages 前端橋接層（2026-10-26）。
  * 完整 UI（public/legacy/app.js，來自 Python/kupei_3/ui_web）原本讀私人 API /api/v1；Pages 版改讀後端 Server API：
  *   評分與明細  /data/<run>/…（summary、details、tr、vparams，選用 valuation、help）
- *   行情        /api/market/latest、/api/market/history（每日收盤，非即時）
+ *   行情        /api/market/latest、/api/market/history（每日收盤）；/api/market/intraday（盤中快照，約 5 分鐘更新）
+ *   新聞        /api/news、/api/news/sources（Google 新聞 RSS，關鍵字來自本機新聞設定）
+ *   報告        /api/reports/<代號>…（列表、單篇、產生請求；請求只限登入帳號）
  *   帳號與同步  /api/auth/*、/api/store/<key>（依帳號分開的雲端文件）
  * 這一層把它們轉成 UI 原本要的形狀（window.KupeiAPI），不重算任何分數、名次或 Gate；缺的資料就回「尚未提供」。
  * 自選、新聞與報告設定仍存本機（kupei3_*）；登入後以雲端文件同步（見下方 sync）。
@@ -161,6 +163,36 @@ function adaptQuotes(latest: LatestResponse): Json {
   return out
 }
 
+/**
+ * 盤中（phase=OPEN）：用 /api/market/intraday 的價格蓋過每日收盤（漲跌、時間一起換），stale 時照樣顯示但標示延遲。
+ * 盤前、收盤後（PRE／CLOSED）或拿不到盤中資料：維持每日收盤。盤中 tuple 的價格是 null（今天還沒成交）就顯示「—」，不拿收盤補。
+ * 同一份 latest＋同一份盤中快照只轉一次（app.js 用 quotes 物件是否相同判斷要不要重畫）。
+ */
+let mergedMemo: { latest: LatestResponse; intra: unknown; out: Json } | null = null
+function adaptQuotesLive(latest: LatestResponse, intra: Intraday | null): Json {
+  const base = adaptQuotes(latest)
+  if (!intra || intra.phase !== 'OPEN') return base
+  if (mergedMemo && mergedMemo.latest === latest && mergedMemo.intra === intra) return mergedMemo.out
+  const quotes: Json = { ...base.quotes }
+  for (const [id, t] of Object.entries(intra.quotes)) {
+    if (!/^\d{4}$/.test(id) || !Array.isArray(t)) continue
+    const price = num(t[0]), change = num(t[1]), volume = num(t[2])
+    const prev = price != null && change != null ? price - change : null
+    quotes[id] = {
+      price, prev_close: prev, change, change_pct: prev ? (change! / prev) * 100 : null, volume,
+      status: 'INTRADAY', source_time: typeof t[3] === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(t[3]) ? t[3] : null,
+    }
+  }
+  const ats = (['L', 'O'] as const).map((m) => intra.markets?.[m]?.at).filter((x) => typeof x === 'string' && !Number.isNaN(Date.parse(x))) as string[]
+  const at = ats.sort((a, b) => Date.parse(a) - Date.parse(b)).pop() ?? null
+  const out = {
+    ...base, market_status: 'OPEN', last_success_at: at, seq: 0, quotes,
+    intraday: { phase: intra.phase, stale: intra.stale, ttl: intra.ttlSeconds, hm: taipeiHm(at ?? (intra.markets?.L?.at || intra.markets?.O?.at)) },
+  }
+  mergedMemo = { latest, intra, out }
+  return out
+}
+
 /*
  * 後端選用檔（valuation.json、help.json）：走 kupei-client 的 loadValuation／loadHelp。
  * manifest.hashes 沒有該鍵＝這個批次沒交付 → 不打網路直接回 null（原本每次都打一次 404）；有就帶雜湊抓一次、同批次共用。
@@ -189,6 +221,211 @@ function adaptValuation(ds: Dataset, v: Json): Json {
   return { valuation_date: ds.head.as_of, companies, dataset_limitations: [], translations: {} }
 }
 
+/* ---------------- 新端點：盤中行情、新聞、報告（2026-10-27） ----------------
+ * 後端會在 starter 加 marketIntraday()／news()／newsSources()／reports()／report()／requestReport()／reportRequests()。
+ * 那之前 kupei-client.ts 不能手改（串接規範 §1、§8），所以先用這個小 helper；合併 starter 後改呼叫 client 的方法，整段刪掉。
+ * 權杖選擇照 kupei-client：登入權杖 ＞ 寫入權杖 ＞ 建置時的唯讀權杖。client 不公開權杖本身，
+ * 這裡依 client.getSession()／hasWriteToken() 判斷要用哪一種，再從 client 用的同一個 storage key 讀出來（不另存、不印出）。
+ * 錯誤一律轉成 KupeiError（{ error: { code, message, details } }）；429 只有 GET 依 Retry-After 重試一次；每個請求 20 秒逾時。
+ */
+const SESSION_KEY = 'kupei:session'
+const WRITE_TOKEN_KEY = 'kupei:write-token'
+
+function tokenFor(loginOnly: boolean): string | null {
+  if (client.getSession()) {
+    try {
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null')
+      if (s && typeof s.token === 'string' && s.token) return s.token
+    } catch { /* 壞掉當作沒登入 */ }
+  }
+  if (loginOnly) return null
+  if (client.hasWriteToken()) {
+    try { const w = localStorage.getItem(WRITE_TOKEN_KEY); if (w) return w } catch { /* ignore */ }
+  }
+  return READ_TOKEN || null
+}
+
+async function apiCall<T>(method: 'GET' | 'POST', path: string, body?: unknown, loginOnly = false, retried = false): Promise<{ status: number; data: T }> {
+  const token = tokenFor(loginOnly)
+  if (loginOnly && !token) throw new KupeiError(401, 'UNAUTHENTICATED', '需要登入帳號', null)
+  const res = await fetch(BASE + path, {
+    method,
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: method === 'GET' ? 'default' : 'no-store',
+    signal: AbortSignal.timeout(20000),
+  })
+  if (res.ok) return { status: res.status, data: (await res.json()) as T }
+  let e: Json = {}
+  try { const j = await res.json(); if (j && typeof j.error === 'object' && j.error) e = j.error } catch { /* 不是 JSON */ }
+  const ra = res.headers.get('Retry-After')
+  const err = new KupeiError(
+    res.status,
+    typeof e.code === 'string' ? e.code : res.status === 401 ? 'UNAUTHENTICATED' : res.status === 404 ? 'NOT_FOUND' : `HTTP_${res.status}`,
+    typeof e.message === 'string' ? e.message : `HTTP ${res.status}`,
+    ra && /^\d+$/.test(ra.trim()) ? Number(ra) : null,
+    e.details,
+  )
+  // 登入權杖被拒：交給 client 確認一次（auth.me() 收到 401 會自己清掉 session、通知畫面）
+  if (err.status === 401 && err.code === 'UNAUTHENTICATED' && client.getSession()) void client.auth.me().catch(() => {})
+  if (err.status === 429 && method === 'GET' && !retried) {
+    await new Promise((r) => setTimeout(r, Math.min(err.retryAfter ?? 30, 60) * 1000))
+    return apiCall<T>(method, path, body, loginOnly, true)
+  }
+  throw err
+}
+const apiGet = async <T>(path: string, loginOnly = false) => (await apiCall<T>('GET', path, undefined, loginOnly)).data
+
+/** 後端還沒開通（唯讀權杖打未開放的路徑是 403 FORBIDDEN、路徑不存在 404）→ UI 顯示「尚未提供」 */
+const notProvided = (e: unknown) => e instanceof KupeiError && (e.code === 'FORBIDDEN' || e.status === 404)
+/** 錯誤 → UI 的回應形狀（app.js 讀 data.error_code／data.message_zh） */
+function errReply(e: unknown, notFound = 'NOT_PROVIDED'): Reply {
+  if (!(e instanceof KupeiError)) return { ok: false, status: 0, data: null }
+  const code = e.code === 'FORBIDDEN' ? 'NOT_PROVIDED' : e.status === 404 ? notFound : e.code
+  return { ok: false, status: e.status, data: { error_code: code, message_zh: e.message, details: e.details ?? null } }
+}
+
+const str = (x: unknown, max: number): string => (typeof x === 'string' ? x.slice(0, max) : '')
+/** 只放行 https 網址；其他（http、javascript:、相對路徑）一律不給連結 */
+function httpsUrl(x: unknown): string | null {
+  if (typeof x !== 'string' || x.length > 2000) return null
+  try { const u = new URL(x); return u.protocol === 'https:' ? u.href : null } catch { return null }
+}
+const isoOrNull = (x: unknown) => (typeof x === 'string' && !Number.isNaN(Date.parse(x)) ? x : null)
+const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : null)
+
+/* ---- 盤中行情 ---- */
+interface Intraday { phase: 'PRE' | 'OPEN' | 'CLOSED'; stale: boolean; ttlSeconds: number; markets: Json; quotes: Record<string, unknown> }
+let intraCache: { at: number; value: Intraday | null } | null = null
+let intraInFlight: Promise<Intraday | null> | null = null
+let intraOff = false // 後端沒開通：這次開頁面不再問
+
+/** 盤中快照；任何錯誤都回 null（行情退回每日收盤）。60 秒內共用同一份，與 marketLatest 一致 */
+function marketIntraday(): Promise<Intraday | null> {
+  if (intraOff) return Promise.resolve(null)
+  if (intraCache && Date.now() - intraCache.at < 60000) return Promise.resolve(intraCache.value)
+  if (intraInFlight) return intraInFlight
+  intraInFlight = apiGet<Json>('/api/market/intraday')
+    .then((v): Intraday | null => {
+      if (!v || !['PRE', 'OPEN', 'CLOSED'].includes(v.phase) || typeof v.quotes !== 'object' || !v.quotes) return null
+      const ttl = num(v.ttlSeconds)
+      return { phase: v.phase, stale: v.stale === true, ttlSeconds: ttl && ttl >= 60 && ttl <= 3600 ? ttl : 300, markets: v.markets && typeof v.markets === 'object' ? v.markets : {}, quotes: v.quotes }
+    }, (e) => { if (notProvided(e)) intraOff = true; return null })
+    .then((v) => { intraCache = { at: Date.now(), value: v }; return v })
+    .finally(() => (intraInFlight = null))
+  return intraInFlight
+}
+
+/** 'HH:MM:SS' 或 ISO 時間 → 台灣時間 HH:MM */
+function taipeiHm(x: unknown): string | null {
+  if (typeof x !== 'string') return null
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(x)) return x.slice(0, 5)
+  const t = Date.parse(x)
+  return Number.isNaN(t) ? null : new Date(t).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+/* ---- 新聞 ---- */
+/** 本機新聞設定（kupei3_news；可能被雲端同步改寫過，照 app.js cleanNS 的規則再驗一次） */
+function newsSettings(): { span: number; groups: { id: string; kw: string[]; ex: string[] }[]; stock: Record<string, { kw: string[]; ex: string[] }>; disabled: string[] } {
+  let raw: any = null
+  try { raw = JSON.parse(localStorage.getItem('kupei3_news') || 'null') } catch { /* 壞掉當作沒有 */ }
+  const list = (a: unknown, max: number) => {
+    const out: string[] = []
+    if (Array.isArray(a)) for (const s of a) { if (typeof s !== 'string') continue; const t = s.trim().slice(0, 50); if (t && !out.includes(t) && out.length < max) out.push(t) }
+    return out
+  }
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  const groups = (Array.isArray(o.groups) ? o.groups : []).filter((g: any) => g && typeof g === 'object' && (typeof g.id === 'number' || typeof g.id === 'string'))
+    .map((g: any) => ({ id: String(g.id), kw: list(g.kw, 5), ex: list(g.ex, 5) }))
+  const stock: Record<string, { kw: string[]; ex: string[] }> = {}
+  if (o.stock && typeof o.stock === 'object') for (const [id, v] of Object.entries(o.stock as Json)) if (/^\d{4}$/.test(id) && v && typeof v === 'object') stock[id] = { kw: list(v.kw, 5), ex: list(v.ex, 5) }
+  return { span: o.span === 3 ? 3 : 1, groups, stock, disabled: list(o.disabled, 200) }
+}
+/** 後端規則：q 1～5 個、exclude 0～5 個、每個 1～50 字，以逗號分隔（關鍵字裡的逗號換成空白） */
+const terms = (a: string[]) => a.map((s) => s.replace(/[,，]/g, ' ').trim().slice(0, 50)).filter(Boolean).slice(0, 5)
+
+const NEWS_LIMITS = ['TITLE_ONLY']
+async function fetchNews(kw: string[], ex: string[], days: 1 | 3 | 5): Promise<Reply> {
+  const q = terms(kw)
+  if (!q.length) return { ok: false, status: 400, data: { error_code: 'NEWS_NO_KEYWORDS', message_zh: '尚未設定關鍵字' } }
+  const x = terms(ex)
+  const qs = `q=${encodeURIComponent(q.join(','))}${x.length ? `&exclude=${encodeURIComponent(x.join(','))}` : ''}&days=${days}`
+  let d: Json
+  try { d = await apiGet<Json>(`/api/news?${qs}`) } catch (e) { return errReply(e) }
+  const off = new Set(newsSettings().disabled)
+  const articles = (Array.isArray(d?.items) ? d.items : []).slice(0, 50).filter((i: any) => i && typeof i === 'object' && typeof i.title === 'string' && i.title)
+    .map((i: any) => ({
+      title: str(i.title, 300), url: httpsUrl(i.url), source_name: str(i.source, 100), source_id: str(i.source, 100),
+      published_at_utc: isoOrNull(i.publishedAt), timezone_basis: 'SOURCE_RFC822',
+    }))
+    .filter((a: Json) => !off.has(a.source_name)) // 新聞設定裡停用的來源（依來源名稱比對）
+  return ok({
+    articles, excluded: [], generated_at: isoOrNull(d?.fetchedAt), source: str(d?.source, 40),
+    retrieval_limitations: d?.stale === true ? [...NEWS_LIMITS, 'STALE'] : NEWS_LIMITS,
+  })
+}
+
+/* ---- 報告 ---- */
+const SAFE_SEG = /^[A-Za-z0-9._-]{1,32}$/
+const REPORT_ST = ['DRAFT', 'PUBLISHED', 'FAILED']
+const REQ_ST = ['QUEUED', 'RUNNING', 'DONE', 'FAILED']
+function adaptReportItem(r: any): Json | null {
+  if (!r || typeof r !== 'object') return null
+  const period = typeof r.period === 'string' ? r.period : null
+  const rev = typeof r.rev === 'number' || typeof r.rev === 'string' ? String(r.rev) : null
+  if (!period || !rev || !SAFE_SEG.test(period) || !SAFE_SEG.test(rev)) return null
+  return {
+    period, revision: rev, status: REPORT_ST.includes(r.status) ? r.status : 'UNKNOWN', title: str(r.title, 200),
+    published_at: isoOrNull(r.generatedAt), url: httpsUrl(r.url),
+    files: (Array.isArray(r.files) ? r.files : []).slice(0, 50).filter((f: any) => f && typeof f.name === 'string')
+      .map((f: any) => ({ name: str(f.name, 200), url: httpsUrl(f.url) })),
+  }
+}
+function adaptRequest(q: any): Json | null {
+  if (!q || typeof q !== 'object' || typeof q.period !== 'string') return null
+  return {
+    id: str(q.id, 64), period: str(q.period, 32), trigger: str(q.trigger, 20), status: REQ_ST.includes(q.status) ? q.status : 'UNKNOWN',
+    created_at: isoOrNull(q.createdAt), updated_at: isoOrNull(q.updatedAt), message: str(q.message, 500),
+  }
+}
+async function reportList(code: string): Promise<Reply> {
+  // 自己的請求只有登入權杖讀得到；沒登入就不問（不是錯誤）
+  const reqP = client.getSession()
+    ? apiGet<Json>(`/api/reports/${code}/requests`, true).then((d) => (Array.isArray(d?.requests) ? d.requests : []), () => null)
+    : Promise.resolve(null)
+  let d: Json
+  try { d = await apiGet<Json>(`/api/reports/${code}`) } catch (e) { void reqP; return errReply(e) }
+  const all = (Array.isArray(d?.reports) ? d.reports : []).map(adaptReportItem).filter(Boolean) as Json[]
+  const time = (x: Json, k: string) => (x[k] ? Date.parse(x[k]) : 0)
+  all.sort((a, b) => time(b, 'published_at') - time(a, 'published_at'))
+  const rq = await reqP
+  const requests = rq ? (rq.map(adaptRequest).filter(Boolean) as Json[]).sort((a, b) => time(b, 'created_at') - time(a, 'created_at')) : null
+  return ok({
+    periods: all.filter((r) => r.status === 'PUBLISHED' || r.status === 'DRAFT'),
+    failed: all.filter((r) => r.status === 'FAILED'),
+    requests, current_request: requests ? requests.find((q) => q.status === 'QUEUED' || q.status === 'RUNNING') ?? null : null,
+  })
+}
+async function reportOne(code: string, period: string, rev: string): Promise<Reply> {
+  if (!SAFE_SEG.test(period) || !SAFE_SEG.test(rev)) return { ok: false, status: 400, data: { error_code: 'REPORT_NOT_FOUND' } }
+  let d: Json
+  try { d = await apiGet<Json>(`/api/reports/${code}/${encodeURIComponent(period)}/${encodeURIComponent(rev)}`) } catch (e) { return errReply(e, 'REPORT_NOT_FOUND') }
+  const r = adaptReportItem(d)
+  if (!r) return { ok: false, status: 502, data: { error_code: 'REPORT_NOT_FOUND' } }
+  // summary 原樣當純文字交給 UI（UI 跳脫後只把換行轉 <br>，不解析 markdown）
+  return ok({ ...r, summary: str(d.summary, 100000), pointer: { published_at: r.published_at }, meta: null })
+}
+async function requestReport(code: string, body: any): Promise<Reply> {
+  const period = typeof body?.period === 'string' && SAFE_SEG.test(body.period) ? body.period : null
+  if (!period) return { ok: false, status: 400, data: { error_code: 'REPORT_PERIOD_UNAVAILABLE' } }
+  try {
+    const r = await apiCall<Json>('POST', `/api/reports/${code}/requests`, { period, trigger: 'MANUAL' }, true)
+    return { ok: true, status: r.status, data: adaptRequest({ ...r.data, period: r.data?.period ?? period }) }
+  } catch (e) {
+    return errReply(e)
+  }
+}
+
 /* ---------------- window.KupeiAPI（UI 的資料層介面） ---------------- */
 
 const ok = (data: any): Reply => ({ ok: true, status: 200, data })
@@ -196,11 +433,52 @@ const no = (status = 404): Reply => ({ ok: false, status, data: null })
 let datasetP: Promise<Dataset> | null = null
 const loadDs = () => (datasetP ??= client.loadDataset())
 
-async function req(method: string, path: string): Promise<Reply> {
+async function req(method: string, path: string, body?: unknown): Promise<Reply> {
   const m = method.toUpperCase()
   const [p, qs = ''] = path.split('?')
+  const seg = p.split('/').map((s) => { try { return decodeURIComponent(s) } catch { return '' } })
   try {
-    if (m === 'GET' && p === '/quotes') return ok(adaptQuotes(await client.marketLatest()))
+    if (m === 'GET' && p === '/quotes') {
+      const [latest, intra] = await Promise.all([client.marketLatest(), marketIntraday()])
+      return ok(adaptQuotesLive(latest, intra))
+    }
+    // 新聞：關鍵字來自本機新聞設定；產業依 span（1／3 天），個股固定近 5 日。date 參數後端不支援，忽略
+    if (m === 'GET' && p === '/news/industry') {
+      const gid = new URLSearchParams(qs).get('group') || ''
+      const g = newsSettings().groups.find((x) => x.id === gid)
+      if (!g) return { ok: false, status: 404, data: { error_code: 'NEWS_GROUP_NOT_FOUND' } }
+      const span = Number(new URLSearchParams(qs).get('span')) === 3 ? 3 : 1
+      return await fetchNews(g.kw, g.ex, span)
+    }
+    if (m === 'GET' && seg[1] === 'news' && seg[2] === 'stock' && seg.length === 4) {
+      const id = seg[3]
+      if (!/^\d{4}$/.test(id)) return { ok: false, status: 400, data: { error_code: 'COMPANY_NOT_FOUND' } }
+      const ds = await loadDs()
+      const name = ds.byId.get(id)?.name
+      if (!name) return { ok: false, status: 404, data: { error_code: 'COMPANY_NOT_FOUND' } }
+      const s = newsSettings().stock[id]
+      // 沒設定過 → 預設「公司名稱、代號」（與 app.js stockKw 的預設相同）；設過就用設定的關鍵字與排除字
+      return await fetchNews(s && s.kw.length ? s.kw : [name, id], s ? s.ex : [], 5)
+    }
+    if (m === 'GET' && p === '/news/sources') {
+      try {
+        const d = await apiGet<Json>('/api/news/sources')
+        const sources = (Array.isArray(d?.sources) ? d.sources : []).filter((s: any) => s && typeof s.name === 'string' && s.name)
+          .slice(0, 100).map((s: any) => ({
+            // 停用比對新聞的 source（來源名稱），所以 source_id 用 name
+            source_id: str(s.name, 100), id: str(s.id, 64), name: str(s.name, 100), url: httpsUrl(s.url), enabled: true, content_scope: 'TITLE_ONLY', usage: '',
+          }))
+        return ok({ sources })
+      } catch (e) { return errReply(e) }
+    }
+    // 報告：/reports/<代號>、/reports/<代號>/<期別>/<版次>、POST /reports/<代號>/requests；/inputs（上傳參考資料）後端不支援
+    if (seg[1] === 'reports' && /^\d{4}$/.test(seg[2] || '')) {
+      const code = seg[2]
+      if (m === 'GET' && seg.length === 3) return await reportList(code)
+      if (m === 'GET' && seg.length === 5) return await reportOne(code, seg[3], seg[4])
+      if (m === 'POST' && seg.length === 4 && seg[3] === 'requests') return await requestReport(code, body)
+      return { ok: false, status: 404, data: { error_code: 'NOT_PROVIDED' } }
+    }
     if (m === 'GET' && p === '/market/history') {
       const ids = decodeURIComponent(new URLSearchParams(qs).get('ids') || '').split(',').filter(Boolean)
       const map: Map<string, Hist> = await client.marketHistory(ids)
@@ -227,7 +505,7 @@ async function req(method: string, path: string): Promise<Reply> {
   } catch (e) {
     return no(e instanceof KupeiError ? e.status : 502)
   }
-  // 自選、設定、登入、新聞、報告、個股問題：Pages 版沒有對應的後端端點，UI 走本機模式或顯示「尚未提供」
+  // 自選、設定、登入、報告參考資料、個股問題：Pages 版沒有對應的後端端點，UI 走本機模式或顯示「尚未提供」
   return no(404)
 }
 
@@ -591,7 +869,13 @@ async function boot() {
   const w = window as any
   w.KUPEI_CONFIG = { mode: 'pages', timeoutMs: 20000, companyCache: 60 }
   w.KupeiAPI = api
-  w.KupeiAuth = { session: () => client.getSession() ?? (client.hasWriteToken() ? { username: '寫入權杖', expiresAt: '' } : null) }
+  w.KupeiAuth = {
+    session: () => client.getSession() ?? (client.hasWriteToken() ? { username: '寫入權杖', expiresAt: '' } : null),
+    /** 有登入帳號（寫入權杖不算）：產生報告請求只收登入權杖 */
+    loggedIn: () => !!client.getSession(),
+    /** 打開帳號視窗的登入畫面（UI 引導登入用） */
+    openLogin: () => { acctOpen = true; mode = 'login'; formMsg = ''; pwMsg = ''; pwOpen = false; renderAcct() },
+  }
   installHook()
   // 回訪且已登入：先把雲端資料合併進本機（最多等 4 秒），UI 才讀 localStorage
   if (canSync()) {
