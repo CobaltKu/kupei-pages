@@ -919,7 +919,7 @@ const FLASH_KEY = 'kupei:acct-flash'
 /** 存一段提示，重新載入後打開帳號視窗顯示 */
 const flash = (t: string) => { try { sessionStorage.setItem(FLASH_KEY, t) } catch { /* ignore */ } }
 const taipeiTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '時間不明')
-const DOC_LABEL: Record<string, string> = { kupei3_watch: '自選群組', kupei3_news: '新聞設定', kupei3_report: '報告設定' }
+const DOC_LABEL: Record<string, string> = { kupei3_watch: '自選群組', kupei3_news: '新聞設定', kupei3_report: '報告設定', kupei3_questions: '個股問題' }
 
 /** 非 2xx 回應 → KupeiError（形狀同 kupei-client：{ error: { code, message, details } }） */
 async function errFrom(res: Response): Promise<KupeiError> {
@@ -938,25 +938,10 @@ async function errFrom(res: Response): Promise<KupeiError> {
 /* ---- 忘記密碼（K-33） ----
  * POST /api/auth/reset { username, code, newPassword }：成功回應同 login（{ user, token, expiresAt }），等同登入；
  * 失敗 401 INVALID_CREDENTIALS（碼錯、過期、用過、帳號停用都一樣）、400 BAD_REQUEST、429 RATE_LIMITED。
- * TODO：starter 加入 client.auth.resetPassword(username, code, newPassword) 後改用它，這個函式整個換成一行呼叫，
- * 呼叫端的「寫 storage＋重新載入」也一起刪掉（client 會自己 setSession、觸發 onSessionChange）。
- * 現在 kupei-client.ts 沒有公開 setSession，所以照它的 storage key（kupei:session）與格式 { token, username, expiresAt } 寫入，
- * 由呼叫端重新載入頁面讓 client 讀到新的 session（client 只在建立時讀 storage）。
+ * 用 starter 的 client.auth.resetPassword：成功即登入（client 寫入 session）；呼叫端再重新載入，走一次啟動同步。
  */
 async function resetPassword(username: string, code: string, newPassword: string): Promise<void> {
-  const res = await fetch(BASE + '/api/auth/reset', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, code, newPassword }),
-    cache: 'no-store',
-    signal: AbortSignal.timeout(20000),
-  })
-  if (!res.ok) throw await errFrom(res)
-  const r = (await res.json()) as Json
-  if (!r || typeof r.token !== 'string' || !r.token || typeof r.user?.username !== 'string' || typeof r.expiresAt !== 'string') {
-    throw new KupeiError(502, 'BAD_RESPONSE', '回應格式不對')
-  }
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ token: r.token, username: r.user.username, expiresAt: r.expiresAt }))
+  await client.auth.resetPassword(username, code, newPassword)
 }
 
 /** 重設碼：去掉空白與 -，12 字元才合格；送出時排成管理頁顯示的 XXXX-XXXX-XXXX（大小寫不動） */
@@ -1072,7 +1057,7 @@ async function submitReset() {
     formMsg = '處理中…'; renderAcct()
     try {
       await resetPassword(u, codeFmt(code), p1)
-      // 新 session 已寫入 storage：重新載入讓 client 讀到（starter 有 resetPassword 後不用重新載入，見 resetPassword 註解）
+      // 重新載入：以新帳號的雲端資料為準走一次啟動同步（換帳號規則 owner／_prev 也在那裡處理）
       flash('密碼已重設，其他裝置已登出')
       frozen = true
       window.clearTimeout(pushTimer)
