@@ -278,6 +278,18 @@ export interface ChangePasswordBody {
   newPassword: string
 }
 
+/**
+ * POST /api/auth/reset 的本文（忘記密碼；不需要登入）。成功回 AuthResponse（新的登入權杖；這個帳號所有舊權杖都失效）。
+ * 帳號或重設碼不對、過期、已用過、帳號停用一律 401 INVALID_CREDENTIALS；帳號或新密碼格式不對 400 BAD_REQUEST。
+ */
+export interface ResetPasswordBody {
+  username: string
+  /** 維護者給的一次性重設碼：12 字元，顯示成 XXXX-XXXX-XXXX；大小寫、- 與空白不影響。24 小時內有效、只能用一次 */
+  code: string
+  /** 8～128 字 */
+  newPassword: string
+}
+
 /** 客戶端存在 storage 的登入狀態（key kupei:session） */
 export interface StoredSession {
   token: string

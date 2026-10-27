@@ -625,6 +625,32 @@
           }
         }
       },
+      "ResetPasswordBody": {
+        "type": "object",
+        "required": [
+          "username",
+          "code",
+          "newPassword"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "不分大小寫"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 64,
+            "example": "7K3M-QX9P-2HWD",
+            "description": "維護者給的一次性重設碼；大小寫、- 與空白不影響"
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "區分大小寫，前後空白也算"
+          }
+        }
+      },
       "NewsItem": {
         "type": "object",
         "required": [
@@ -2080,6 +2106,58 @@
           },
           "401": {
             "description": "INVALID_CREDENTIALS：目前密碼不對（登入權杖不受影響）；UNAUTHENTICATED：登入權杖無效或過期",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/AuthRateLimited"
+          }
+        }
+      }
+    },
+    "/api/auth/reset": {
+      "post": {
+        "summary": "忘記密碼：用重設碼設新密碼",
+        "security": [],
+        "description": "不需要權杖。重設碼由維護者在帳號管理頁產生後私下交給使用者（12 字元 Crockford base32，顯示成 XXXX-XXXX-XXXX；24 小時內有效、只能用一次；同一帳號再產生會讓舊的失效）。比對前去掉 - 與空白、轉大寫。成功：設新密碼、這個帳號所有登入權杖失效、重設碼作廢，回傳給這台的新登入權杖（格式同 login）。計入註冊＋登入＋改密碼的每 IP 每分鐘 10 次，另外每個帳號每分鐘 10 次（與登入共用）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已重設，回傳新的登入權杖",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BAD_REQUEST：格式不對（帳號規則同註冊、新密碼 8～128 字；先驗格式）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "INVALID_CREDENTIALS：帳號不存在、重設碼不對、過期、已用過、帳號停用（一律同一個訊息，不透露是哪一種）",
             "content": {
               "application/json": {
                 "schema": {

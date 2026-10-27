@@ -18,5 +18,12 @@
 .acct-adv { margin-top: 14px; border-top: 1px solid var(--line, #24292e); padding-top: 8px; }
 .acct-adv summary { cursor: pointer; font-size: 12px; color: var(--muted, #9aa3ab); }
 .acct-adv input { margin-top: 6px; }
+.acct-btn:disabled { opacity: .5; cursor: default; }
+.acct-ok { color: var(--down, #2fb36b); font-size: 12px !important; }
+.acct-forgot { margin: 6px 0 0 !important; text-align: right; }
+.acct-link { padding: 0; font: inherit; font-size: 12px; color: var(--accent, #e8833a); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.acct-list { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+.acct-list li { margin: 2px 0; }
+.acct-list li .acct-muted { margin-left: 8px; }
 /* 個股頁估價卡：價格格太窄，漲跌幅被省略號吃掉 → 漲跌幅換到價格下一行 */
 .vrow .v .chg { display: block; margin-left: 0; }

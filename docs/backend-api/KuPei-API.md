@@ -36,7 +36,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 3. **所有請求都帶 `Authorization: Bearer <權杖>`。** 沒有權杖或權杖錯誤是 401，不是程式壞了，請提示使用者檢查 `.env.local`。
 4. **先讀 `/data/manifest.json` 取得批次編號 `run`**，再讀 `/data/<run>/...`。不要把批次編號寫死。
 5. **控制請求量：**
-   - `/api/market/*` 每個 IP 每分鐘最多 30 次、`/api/store*` 60 次、註冊＋登入＋改密碼 10 次，超過回 429。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
+   - `/api/market/*` 每個 IP 每分鐘最多 30 次、`/api/store*` 60 次、註冊＋登入＋改密碼＋重設密碼 10 次，超過回 429。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
    - `/data/*` 是靜態檔，不限次數；`summary.json` 讀一次後放在記憶體，不要每個畫面重抓。
 6. **遇到錯誤時：**
    - 429：等 `Retry-After` 秒數後再試，不要立刻重送。
@@ -44,7 +44,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
    - 瀏覽器出現 CORS 錯誤：本機要是 `http://localhost:<埠>` 或 `http://127.0.0.1:<埠>`；GitHub Pages 要先把 `https://<帳號>.github.io` 給維護者加白名單。不要改用 `no-cors` 之類的方式硬解。
 7. **正式部署只到雙方約定的 GitHub Pages**（流程見《KuPei-前端部署指南-GitHub-Pages.md》），權杖用 GitHub Actions secret `VITE_KUPEI_TOKEN` 在建置時注入；不要把權杖貼進 issue、commit 訊息或對話。
 8. 目前沒有即時串流：盤中價只有定時快照（`/api/market/intraday`，`stale` 為 `true` 時不要當成即時價），新聞與報告見第 12 條；不要為沒有的資料做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
-9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.register()`／`kupei.auth.login()`（註冊畫面先呼叫 `kupei.auth.config()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。沒登入時 App 退回本機模式（只存 localStorage、顯示「未登入，只存在這台裝置」），不要報錯；評分與行情不需要登入。
+9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.register()`／`kupei.auth.login()`（註冊畫面先呼叫 `kupei.auth.config()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。沒登入時 App 退回本機模式（只存 localStorage、顯示「未登入，只存在這台裝置」），不要報錯；評分與行情不需要登入。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
 12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存檔案，不要做上傳。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period)`，進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。報告是外部管線產生的，後端不會自己產生。
@@ -143,6 +143,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 | `POST` | `/api/auth/logout` | 標頭 `Authorization: Bearer <登入權杖>` | `{ ok: true }`，這個權杖立刻失效（其他裝置的登入不受影響） |
 | `GET` | `/api/auth/me` | 標頭 `Authorization: Bearer <登入權杖>` | `{ user: { id, username } }` |
 | `POST` | `/api/auth/password` | 標頭 `Authorization: Bearer <登入權杖>`，本文 `{ "currentPassword", "newPassword" }` | 200，格式同 login（**新的**登入權杖） |
+| `POST` | `/api/auth/reset` | `{ "username", "code", "newPassword" }`（不需要權杖） | 200，格式同 login（忘記密碼：用維護者給的重設碼設新密碼，成功即登入） |
 
 - **帳號**：不分大小寫（一律轉小寫存），3～32 字，只能用英文字母、數字與 `_` `.` `-`，開頭要是英數。**密碼** 8～128 字（區分大小寫，前後空白也算）。
 - **登入權杖**：`kps_` 開頭的 47 字元字串，有效 **30 天**（`expiresAt`，ISO 8601 UTC），到期要重新登入（沒有自動續期）。之後所有請求用 `Authorization: Bearer <登入權杖>`：能讀評分資料與行情（同唯讀權杖），加上 `/api/store`。同一個帳號可以在多台裝置各自登入。
@@ -150,11 +151,12 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 - **與寫入權杖的關係**：寫入權杖的文件 owner 是共用的 `kupei`，每個帳號是自己的 `u:<id>`，**彼此看不到**（帳號登入後看不到寫入權杖存的那份，反之亦然；要搬資料由前端讀出再寫進去）。站長的自選（`/api/watchlist`）兩者都碰不到。
 - **邀請碼**（2026-10-26 新增）：維護者可以把「註冊需要邀請碼」打開。打開時 `register` 要帶 `inviteCode`，沒帶 403 `INVITE_REQUIRED`、不對 403 `INVITE_INVALID`；關閉時這個欄位被忽略（帶了也沒關係）。註冊畫面打開時先呼叫 `GET /api/auth/config`，`inviteRequired` 為 `true` 才顯示邀請碼欄位。邀請碼本身不會從任何公開端點回傳，由維護者另外給使用者。
 - **改密碼**（2026-10-26 新增）：`POST /api/auth/password`，新密碼規則同註冊（8～128 字）。目前密碼錯 401 `INVALID_CREDENTIALS`（登入權杖不受影響，不要因此把使用者登出）。成功後**這個帳號所有裝置的登入權杖都失效**（包含這台的舊權杖），回應裡是這台的新權杖（30 天）——要立刻換掉存著的權杖；別台裝置下一個請求會收到 401 `UNAUTHENTICATED`，回到未登入。
-- **限流**：註冊＋登入＋改密碼合計每個 IP 每分鐘 **10 次**（IPv6 以 /64 為一組）；登入另外每個帳號每分鐘 **10 次**（不分 IP），超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
+- **忘記密碼**（2026-10-27 新增）：帳號沒有 Email，所以由維護者在帳號管理頁產生**一次性重設碼**（12 字元，顯示成 `XXXX-XXXX-XXXX`，只用數字與不易混淆的大寫字母），私下交給使用者。使用者在 App 輸入帳號、重設碼、新密碼，呼叫 `POST /api/auth/reset`。重設碼 **24 小時**內有效、**只能用一次**；維護者再產生一組會讓舊的失效。比對時去掉 `-` 與空白、不分大小寫。成功：設新密碼、**這個帳號所有裝置的登入權杖都失效**、回應是這台的新權杖（同 login，直接是登入狀態）。帳號不存在、重設碼不對、過期、已用過、帳號停用 → 一律 401 `INVALID_CREDENTIALS`（不透露是哪一種）；帳號或新密碼格式不對 400 `BAD_REQUEST`（先驗格式）。
+- **限流**：註冊＋登入＋改密碼＋重設密碼合計每個 IP 每分鐘 **10 次**（IPv6 以 /64 為一組）；登入與重設密碼另外每個帳號每分鐘 **10 次**（不分 IP，兩者合計），超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
 - 不需要 `X-Requested-With`；CORS 與其他端點相同（預檢允許 `POST`）。
-- **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
+- **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對；重設密碼時＝帳號或重設碼不對、過期、已用過或帳號停用）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
 - **帳號被停用**：維護者可以停用帳號（所有裝置立刻登出、之後登入一律 401 `INVALID_CREDENTIALS`；雲端文件保留，恢復後照舊）。
-- **目前沒有**：忘記密碼、刪除帳號、Email 驗證。忘記密碼只能請維護者處理。
+- **目前沒有**：刪除帳號、Email 驗證、使用者自己申請重設碼（重設碼只能由維護者產生）。
 
 ```ts
 const { inviteRequired } = await kupei.auth.config()      // true → 註冊畫面多一個邀請碼欄位
@@ -162,6 +164,7 @@ await kupei.auth.register('coku', 'my-long-password', inviteCode)   // 或 kupei
 kupei.getSession()                                      // { username: 'coku', expiresAt: '…' } | null
 await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))
 await kupei.auth.changePassword('my-long-password', 'new-long-password')   // 其他裝置全部登出，這台自動換新權杖
+await kupei.auth.resetPassword('coku', '7K3M-QX9P-2HWD', 'new-long-password') // 忘記密碼：維護者給的重設碼，成功即登入
 await kupei.auth.logout()
 ```
 
@@ -194,7 +197,7 @@ await kupei.auth.logout()
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
 | `GET` | `/api/news?q=台積電,2330&exclude=廣告&days=3` | `{ items: [{ title, url, source, publishedAt }], fetchedAt, source: "google-news-rss", stale? }`。`q` 1～5 個關鍵字（之間是 OR）、`exclude` 0～5 個排除字（**只比對標題**）、每個 1～50 字，逗號分隔；`days` 1、3 或 5（省略＝3）。不合法 400。新→舊、最多 50 則、只有 `days` 天內的；`url` 一定是 https（Google 新聞的轉址連結，打開會到原文）；`title` 已去掉結尾的「 - 來源」。伺服器同一個查詢 30 分鐘內只抓一次，瀏覽器可留 5 分鐘（`private, max-age=300`）。來源暫時抓不到時回較舊的結果並帶 `"stale": true`，完全沒有舊結果時 **502** `UPSTREAM_ERROR` |
-| `GET` | `/api/news/sources` | `{ sources: [{ id: "google-news", … }, { id: "bing-news", name: "Bing 新聞", … }] }`。後端先抓 Google 新聞，失敗（Google 會擋 Cloudflare 機房 IP）改抓 Bing 新聞；`source` 欄位目前固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
+| `GET` | `/api/news/sources` | `{ sources: [{ id: "google-news", … }, { id: "bing-news", name: "Bing 新聞", … }] }`。後端先抓 Bing 新聞（每個關鍵字各查一次再合併），失敗才改抓 Google 新聞（Google 會擋 Cloudflare 機房 IP）；`source` 欄位目前固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
 | `GET` | `/api/reports/<code>` | `{ reports: [{ period, rev, status, title, generatedAt, url, files }] }`（不含 `summary`）。`code` 4 碼數字。`period` 新→舊、同期 `rev` 新→舊；`status` 是 `DRAFT`／`PUBLISHED`／`FAILED`；`url` 是 https 或 `null`；`files` 是 `[{ name, url }]`（外部 https 連結，後端不存檔案） |
 | `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
 | `POST` | `/api/reports/<code>/requests` | **登入權杖**。本文 `{ "period": "2026Q2", "trigger": "MANUAL" }` → **202** `{ id, status: "QUEUED", createdAt }`。同一期已經在排隊就回那一筆（**200**，同樣形狀）。每個帳號最多 20 筆排隊中，超過 **403** `QUOTA_EXCEEDED`（`details: { queued, maxQueued }`） |
@@ -223,7 +226,7 @@ await kupei.auth.logout()
 | --- | --- | --- |
 | 400 | `BAD_REQUEST` | 參數不對（例如 `codes` 不是 1～30 個 4 碼代號） |
 | 401 | `UNAUTHENTICATED` | 權杖不對，或登入權杖過期／已登出（JSON，帶 CORS）。完全沒帶 `Authorization` 時，`/data/*` 回純文字 `Unauthorized`、`/api/*` 回 JSON 401，兩者都**不帶 CORS 標頭**（瀏覽器跨來源只會看到 CORS 錯誤） |
-| 401 | `INVALID_CREDENTIALS` | 登入時帳號不存在或密碼錯（含被停用的帳號）；改密碼時目前密碼不對 |
+| 401 | `INVALID_CREDENTIALS` | 登入時帳號不存在或密碼錯（含被停用的帳號）；改密碼時目前密碼不對；重設密碼時帳號或重設碼不對、過期、已用過或帳號停用 |
 | 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
@@ -231,7 +234,7 @@ await kupei.auth.logout()
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
 | 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }` |
 | 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過 300 KB |
-| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼 10 次（登入另外每個帳號 10 次）。IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
+| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 10 次）。IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
 | 502 | `UPSTREAM_ERROR` | `/api/news` 的新聞來源暫時抓不到、伺服器也沒有舊結果；稍後再試（不要立刻重送） |
 | 404 | `NOT_FOUND` | 刪除不存在的文件、沒有這份報告（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 

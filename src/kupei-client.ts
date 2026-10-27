@@ -12,6 +12,8 @@
 //      用登入權杖時收到 401 UNAUTHENTICATED（過期、在別處登出、帳號被停用、在別台裝置改了密碼）→ 自動清掉 session，前端回到未登入。
 //      註冊前先呼叫 auth.config()：inviteRequired 為 true 時註冊畫面要多一個邀請碼欄位。
 //      auth.changePassword() 成功後這個帳號所有裝置的舊權杖都失效，這台自動換成新權杖。
+//      忘記密碼：使用者向維護者拿一次性重設碼（24 小時、只能用一次），auth.resetPassword(帳號, 重設碼, 新密碼)
+//      成功後所有裝置的舊權杖失效，這台直接是登入狀態（同 login）。
 //   8. 可選批次檔（help.json 說明頁、valuation.json 估價、node_info.json 節點完整定義）：不在 loadDataset 裡，
 //      要用時才呼叫 loadHelp()／loadValuation()／loadNodeInfo()。這個批次沒交付（manifest.hashes 沒有該鍵）→ 回 null、
 //      不打網路；有就帶 ?v=<雜湊> 抓一次，同一個批次之後直接回記憶體，換批次才重抓。內容形狀由批次交付方決定，用前自己檢查。
@@ -31,6 +33,7 @@
 //   const { inviteRequired } = await kupei.auth.config()  // 註冊要不要邀請碼
 //   await kupei.auth.register(username, password, inviteCode)   // 或 kupei.auth.login(...)；成功回 { user }
 //   await kupei.auth.changePassword(current, next)       // 其他裝置全部登出，這台換新權杖
+//   await kupei.auth.resetPassword(username, resetCode, next)   // 忘記密碼：用維護者給的重設碼設新密碼，成功即登入
 //   kupei.getSession()                                   // { username, expiresAt } | null，同步、不打網路
 //   await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))   // 跨裝置同步（依帳號）
 //   await kupei.auth.logout()
@@ -64,6 +67,7 @@ import type {
   ReportMeta,
   ReportRequest,
   ReportRequestCreated,
+  ResetPasswordBody,
   SessionInfo,
   StoredSession,
   Translations,
@@ -615,6 +619,19 @@ export function createKupeiClient(cfg: KupeiConfig) {
           cache: 'no-store',
           token: s.token,
         })
+        setSession({ token: r.token, username: r.user.username, expiresAt: r.expiresAt })
+        return { user: r.user }
+      },
+
+      /**
+       * 忘記密碼（不需要登入）：用維護者給的一次性重設碼（XXXX-XXXX-XXXX；大小寫、- 與空白都不影響）設新密碼。
+       * 新密碼 8～128 字。成功後這個帳號所有裝置的登入權杖都失效、重設碼作廢，這台直接是登入狀態（回應同 login）。
+       * 錯誤：401 INVALID_CREDENTIALS（帳號或重設碼不對、過期、用過、帳號停用——不分是哪一種，請一律提示「帳號或重設碼不對，
+       * 請向維護者重新索取」）、400 BAD_REQUEST（帳號或新密碼格式不對）、429 RATE_LIMITED（與註冊、登入合計每分鐘 10 次）
+       */
+      async resetPassword(username: string, code: string, newPassword: string): Promise<{ user: AuthUser }> {
+        const body: ResetPasswordBody = { username: username.trim(), code: code.trim(), newPassword }
+        const r = await get<AuthResponse>('/api/auth/reset', { method: 'POST', body, cache: 'no-store', anonymous: true })
         setSession({ token: r.token, username: r.user.username, expiresAt: r.expiresAt })
         return { user: r.user }
       },
