@@ -302,11 +302,17 @@ function doImport(){
 }
 
 /* ================= 行情（T4：每 30 秒抓取＋SSE；I6） ================= */
-var QT={on:false,st:null,map:{},last:null,tdate:null,dates:null,seq:0,es:null,fails:0,poll:null,t:null,v:0}; /* v：行情版本，畫面快取比對用 */
+var QT={on:false,st:null,map:{},last:null,tdate:null,dates:null,seq:0,es:null,fails:0,poll:null,t:null,v:0,intra:null,it:null}; /* intra：Pages 盤中快照 {stale,ttl,hm}，收盤／盤前為 null */ /* v：行情版本，畫面快取比對用 */
 var VAL={on:false,map:{},date:null,limitations:[]};
-function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};EX.stale=QT.st==='DELAYED';}
+function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};QT.intra=s.intraday||null;EX.stale=QT.st==='DELAYED'||!!(QT.intra&&QT.intra.stale);if(PAGES){var L=pxLabel();JX0[0][1]=JXW[0][1]=WFX[0][0]=L;}qtSchedule();}
+/* 價格欄名稱：Pages 盤中顯示「盤中價」，其餘照 PXL（收盤價／成交價） */
+function pxLabel(){return PAGES&&QT.intra?'盤中價':PXL;}
 function qtMerge(ev){QT.v++;var q=ev.quotes||{};Object.keys(q).forEach(function(k){QT.map[k]=q[k];});QT.seq=Math.max(QT.seq,ev.seq||0);QT.last=new Date().toISOString();}
-function qtRefresh(){KupeiAPI.req('GET','/quotes').then(function(r){if(r.ok&&!qtSame(r.data)){qtApply(r.data);quotesChanged();}});}
+function qtRefresh(){KupeiAPI.req('GET','/quotes').then(function(r){if(r.ok&&!qtSame(r.data)){qtApply(r.data);quotesChanged();}else qtSchedule();},function(){qtSchedule();});}
+/* Pages 盤中（2026-10-27）：後端每 ttlSeconds（約 5 分鐘）更新一次盤中快照，所以只有盤中（phase=OPEN）且分頁可見時，
+   每 ttl 秒重抓一次 /api/market/intraday。這是跟著後端快照的更新頻率走（經確認可接受），不是輪詢即時報價；
+   分頁在背景時不抓，回到分頁由 visibilitychange 補抓；盤前、收盤後不排程，只在載入與回到分頁時讀一次（串接規範 §2.5）。 */
+function qtSchedule(){if(QT.it){clearTimeout(QT.it);QT.it=null;}if(!PAGES||!QT.intra)return;QT.it=setTimeout(function(){QT.it=null;if(document.visibilityState==='visible')qtRefresh();},(QT.intra.ttl||300)*1000);}
 function qtPoll(){if(QT.poll)return;QT.poll=setInterval(qtRefresh,PAGES?300000:30000);}
 function qtStream(){
   if(!window.EventSource){qtPoll();return;}
@@ -324,6 +330,12 @@ function hm(iso){if(!iso)return '—';var d=new Date(iso);return isNaN(d)?'—':
 function md(s){if(!s)return '—';var p=String(s).slice(0,10).split('-');return p.length===3?(+p[1])+'/'+(+p[2]):s;}
 function qtLabel(){
   if(!QT.on)return '行情：尚未接上';
+  if(QT.intra){
+    /* Pages 盤中快照：約 ttl 秒更新一次，不是逐筆即時；stale＝後端快照超過預期時間沒更新，價格仍顯示 */
+    var mins=Math.max(1,Math.round((QT.intra.ttl||300)/60)),at=QT.intra.hm?esc(QT.intra.hm):'—';
+    if(QT.intra.stale)return '<span style="color:var(--warn)" title="後端盤中快照超過預期時間沒有更新，價格停在最後一次快照">⚠ 盤中資料延遲｜最後更新 '+at+'</span>';
+    return '<span title="盤中快照，約每 '+mins+' 分鐘更新，非逐筆即時">盤中 '+at+'（約 '+mins+' 分鐘更新）</span>';
+  }
   if(QT.st==='CLOSED'){
     /* Pages：每日收盤（非即時）；上市（L）、上櫃（O）收盤日不同時兩個都標 */
     var d=QT.dates||{},both=d.L&&d.O&&d.L!==d.O,tt='每日收盤價，非即時'+(d.L?'；上市 '+d.L:'')+(d.O?'；上櫃 '+d.O:'');
@@ -332,7 +344,7 @@ function qtLabel(){
   if(QT.st==='DELAYED')return '<span style="color:var(--warn)">⚠ 行情延遲｜最後更新 '+hm(QT.last)+'</span>';
   return '成交價 '+hm(QT.last)+'｜FinMind';
 }
-function updLine(){$('h-upd').innerHTML=qtLabel();var al=QT.on&&QT.st==='DELAYED';$('h-alert').hidden=!al;if(al)$('h-alert').textContent='行情延遲：超過 2 分鐘沒有新資料，成交價與安全邊際停在 '+hm(QT.last)+'；恢復後自動更新。';}
+function updLine(){$('h-upd').innerHTML=qtLabel();var ia=QT.on&&!!(QT.intra&&QT.intra.stale),al=QT.on&&QT.st==='DELAYED'||ia;$('h-alert').hidden=!al;if(ia)$('h-alert').textContent='盤中資料延遲：後端盤中快照超過預期時間沒有更新，價格與安全邊際停在 '+(QT.intra.hm||'—')+'；恢復後自動更新。';else if(al)$('h-alert').textContent='行情延遲：超過 2 分鐘沒有新資料，成交價與安全邊際停在 '+hm(QT.last)+'；恢復後自動更新。';}
 function quotesChanged(full){
   if(QT.t)return;
   QT.t=setTimeout(function(){QT.t=null;updLine();
@@ -574,14 +586,14 @@ function mRow(r){
   return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+(HS.flash===r.id?' flash':'')+'" id="mr-'+rid+'"><div class="mhwrap"><button class="mhead" data-mexp="'+rid+'" aria-expanded="'+open+'"><span class="mrk num">'+rankTxt(r)+pcMark(r)+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+dotFor(r.id)+badges(r)+'</span><span class="l2">'+mLine2(r)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'" data-q2="'+rid+'">'+pxHtml(o)+'</span><span class="mmg num'+(EX.stale?' stale':'')+'" data-m2="'+rid+'" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+add+'</div>'+(open?mDetail(r,acts):'')+'</div>';
 }
 function mSortOpts(){
-  var o=[['total','總名次'],['price',PXL],['margin','安全邊際']].concat(MAJ.map(function(l,k){return ['m'+k,l];}));
+  var o=[['total','總名次'],['price',pxLabel()],['margin','安全邊際']].concat(MAJ.map(function(l,k){return ['m'+k,l];}));
   $('h-msort').innerHTML=o.map(function(x){return '<option value="'+x[0]+'"'+(HS.key===x[0]?' selected':'')+'>排序：'+esc(x[1])+'</option>';}).join('');
 }
 function hSig(){return [HS.key,HS.dir,HS.hideVeto,HS.hideTrend,!!HS.wide,isM(),EX.stale,EX.fail,QT.v,JSON.stringify(W.groups)].join('|');}
 function hRender(done){
   HS.list=hSorted();HS.sig=hSig();
   var key=HS.key;
-  $('h-sort').textContent=key==='total'?'排序：總名次':'排序：'+(key==='price'?PXL:key==='margin'?'安全邊際':MAJ[+key.slice(1)])+(HS.dir==='desc'?'，高 → 低':'，低 → 高');
+  $('h-sort').textContent=key==='total'?'排序：總名次':'排序：'+(key==='price'?pxLabel():key==='margin'?'安全邊際':MAJ[+key.slice(1)])+(HS.dir==='desc'?'，高 → 低':'，低 → 高');
   $('h-reset').hidden=key==='total';
   $('h-err').hidden=!EX.fail;$('h-wrap').style.visibility=EX.fail?'hidden':'';$('h-mlist').style.visibility=EX.fail?'hidden':'';
   if(EX.fail){$('h-wrap').style.display='none';$('h-mlist').style.display='none';}else{$('h-wrap').style.display='';$('h-mlist').style.display='';}
@@ -668,7 +680,7 @@ function hMNews(){
 }
 function hNews(){
   hMNews();
-  $('h-nhead').innerHTML='產業新聞顯示區間 '+segHtml()+'<span>'+(nSpan()===3?'近 3 天（前三日 07:30 – 今日 07:30）':'當日（前一日 07:30 – 今日 07:30）')+'；預設值可在「新聞關鍵字設定」調整</span>';
+  $('h-nhead').innerHTML='產業新聞顯示區間 '+segHtml()+'<span>'+(PAGES?'近 '+nSpan()+' 天（依新聞發布時間）':nSpan()===3?'近 3 天（前三日 07:30 – 今日 07:30）':'當日（前一日 07:30 – 今日 07:30）')+'；預設值可在「新聞關鍵字設定」調整</span>';
   $('h-news').innerHTML=NS.groups.map(function(g){
     return '<div class="card"><div style="display:flex;align-items:baseline;gap:8px;min-width:0"><h2 style="white-space:nowrap">產業新聞</h2><span class="kw" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">｜'+esc(g.kw.join('、')||'（尚未設定關鍵字）')+'</span></div><div class="placeholder">'+NEWS_OFF+'</div><a href="#/news/g'+esc(g.id)+'" style="font-size:12px;align-self:flex-start">新聞頁</a></div>';
   }).join('')||'<div class="placeholder">尚未設定產業新聞關鍵字組，可到「新聞關鍵字設定」新增。</div>';
@@ -732,7 +744,7 @@ function wRender(){
   if(!g||!g.ids.length)b='<tr><td colspan="30" style="text-align:left;color:var(--faint);padding:16px">此群組還沒有公司。到首頁點「＋」加入。</td></tr>';
   $('w-body').innerHTML=b;
   importBanner();
-  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');$('w-legend3').textContent=miss.length?miss.join('、')+'尚未提供':(PAGES?'收盤價為每日收盤（非即時）；安全邊際依收盤價計算':'成交價來源 FinMind；安全邊際依即時股價計算');
+  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');$('w-legend3').textContent=miss.length?miss.join('、')+'尚未提供':(PAGES?(QT.intra?'盤中為約 5 分鐘更新的快照（非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):'成交價來源 FinMind；安全邊際依即時股價計算');
   if(isM()){
     var ids=g?g.ids:[];
     $('w-mlist').innerHTML=ids.length?ids.map(function(id,ix){
@@ -869,7 +881,7 @@ function sRender(){
 function sValRender(id){
   var r=BYID[id];if(!r)return;var o=sim(id),mg=margin(o);
   $('s-vbase').textContent=(QT.on?qtLabel().replace(/<[^>]+>/g,''):'行情尚未接上')+'｜估價基準日 '+(VAL.on&&VAL.date?md(VAL.date):'—');
-  var kv=[[EX.stale?PXL+' <span class="stale-ic">⚠</span>':PXL,EX.stale&&o.price!=null?'<span class="stale">'+fmt(o.price)+'</span>':pxHtml(o)],['中心',fmt(o.typ)],[EX.stale?'安全邊際 <span class="stale-ic">⚠</span>':'安全邊際','<span style="'+mgStyle(mg)+'">'+pct(mg)+'</span>'],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]];
+  var kv=[[EX.stale?pxLabel()+' <span class="stale-ic">⚠</span>':pxLabel(),EX.stale&&o.price!=null?'<span class="stale">'+fmt(o.price)+'</span>':pxHtml(o)],['中心',fmt(o.typ)],[EX.stale?'安全邊際 <span class="stale-ic">⚠</span>':'安全邊際','<span style="'+mgStyle(mg)+'">'+pct(mg)+'</span>'],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]];
   $('s-val').innerHTML=kv.map(function(x){return '<div><div class="k">'+x[0]+'</div><div class="v num">'+x[1]+'</div></div>';}).join('');
   // 共通限制每家都相同，收合顯示一次；原因碼已在狀態說明列出的旗標不再重複（2026-10-24 正式快照核對）
   $('s-vlimits').innerHTML=VAL.on&&VAL.limitations.length?'<details><summary>資料集共通限制（'+VAL.limitations.length+' 項，適用全部公司）</summary>'+VAL.limitations.map(function(x){return '<div title="'+esc(x.code)+'">・'+esc(x.message_zh)+'</div>';}).join('')+'</details>':'';
@@ -935,7 +947,7 @@ function nRender(kw){
   $('n-main').innerHTML='<div style="display:flex;align-items:baseline;gap:10px"><h2 class="kw">'+esc(title)+'</h2></div><div class="placeholder">'+NEWS_OFF+'</div>';
   $('n-src').innerHTML='';
 }
-function nRange(){var i=+$('n-date').value||0,sp=NP.kw.charAt(0)==='g'?nSpan():1,now=new Date();var d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i),p=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i-sp);$('n-range').textContent=(p.getMonth()+1)+'/'+p.getDate()+' 07:30（含）– '+(d.getMonth()+1)+'/'+d.getDate()+' 07:30（不含），台灣時間';}
+function nRange(){if(PAGES){$('n-date').hidden=true;$('n-range').textContent='近 '+(NP.kw.charAt(0)==='g'?nSpan():5)+' 天（依新聞發布時間；後端不提供指定日期）';return;}var i=+$('n-date').value||0,sp=NP.kw.charAt(0)==='g'?nSpan():1,now=new Date();var d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i),p=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i-sp);$('n-range').textContent=(p.getMonth()+1)+'/'+p.getDate()+' 07:30（含）– '+(d.getMonth()+1)+'/'+d.getDate()+' 07:30（不含），台灣時間';}
 $('n-date').addEventListener('change',function(){nRange();});
 $('n-kw').addEventListener('change',function(){location.hash='#/news/'+$('n-kw').value;});
 /* ================= NEWS SETTINGS ================= */
@@ -1068,8 +1080,8 @@ function stRender(){
     ['行情',q.enabled?({OPEN:'交易中',DELAYED:'延遲',CLOSED:'收盤／休市'}[QT.st||q.market_status]||v(q.market_status))+'｜最後成功 '+(q.last_success_at?new Date(q.last_success_at).toLocaleString('zh-TW',{hour12:false}):'—')+(q.last_error_at?'｜最後失敗 '+new Date(q.last_error_at).toLocaleString('zh-TW',{hour12:false}):'')+'｜判定依據 '+v(q.calendar_basis):'未啟用'],
     ['近 20 日行情與月營收',hi.enabled?'啟用｜最後更新 '+v(hi.last_success_at):'未啟用'],
     ['全市場估價',va.enabled?'啟用｜估價基準日 '+v(va.valuation_date):'未啟用（尚無正式估價快照）'],
-    ['新聞',(function(n){if(!n||!n.enabled)return PAGES?'未提供（後端未承接）':'未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
-    ['報告',STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
+    ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google 新聞（後端每 30 分鐘更新；未開通時顯示「尚未提供」）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
+    ['報告',PAGES?'依請求產生（登入帳號後可送出，最多 20 筆；不支援上傳參考資料）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
     ['備份',!bk.enabled?(PAGES?'未提供（後端不做自動備份；匯出方式待確認）':'未設定'):(bk.status==='PASS'?'正常｜最後完成 '+v(bk.completed_at):'🔴 異常｜'+v(bk.error_code))],
     ['資料儲存',PAGES?(window.KupeiAuth&&window.KupeiAuth.session()?'這台瀏覽器；已登入 '+window.KupeiAuth.session().username+'，自選與設定依帳號雲端同步':'這台瀏覽器（未登入；登入後自選與設定可跨裝置同步）'):(SRV.mode==='server'?'主機（跨裝置同步）':'這台瀏覽器（主機寫入服務未啟用）')]
   ];
@@ -1164,10 +1176,10 @@ var wasM=isM();window.addEventListener('resize',function(){var m=isM();if(m!==wa
 function basisTxt(){return '分析財報 '+v(H.requested_period)+'｜DAR-L 依 '+v(H.annual_period)+' 年報｜資料計算 '+v(STAT.data_calculation_version)+'｜as-of '+v(H.as_of);}
 $('h-basis').textContent=basisTxt();
 $('h-mfoot').textContent=basisTxt()+'｜試算';
-function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+'）':'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
+function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.intra?'行情為盤中快照（約 5 分鐘更新，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
 bannerRender();
 $('h-upd').textContent='行情：尚未接上';
-if(PAGES){$('w-store').textContent='自選存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';$('ns-store').textContent='設定存在這台瀏覽器；登入帳號後各裝置同步（新聞擷取功能尚未提供）';}
+if(PAGES){$('w-store').textContent='自選存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';$('ns-store').textContent='設定存在這台瀏覽器；登入帳號後各裝置同步｜來源：Google 新聞（每 30 分鐘更新）';}
 if(SRV.mode==='server'){$('w-store').textContent='自選存在主機，各裝置同步；修改需登入';$('ns-store').textContent='每日擷取一次（前一日 07:30–當日 07:30）；設定存在主機';}
 /* 首頁只在 main() 最後的 route() 畫一次；行情若已先到（SB.quotes）先套用，第一次畫面就有收盤價 */
 if(SB&&SB.quotes&&SB.quotes.ok){qtApply(SB.quotes.data);updLine();bannerRender();}
@@ -1177,17 +1189,19 @@ var _qa=quotesChanged;quotesChanged=function(f){bannerRender();_qa(f);};
 /* ================= 上線前接線（2026-10-23）：新聞 T9、報告 T10／K10 =================
  * 依據：UIUX/Codex 任務/2026-10-23_上線前非AI功能_Claude實作與複查.md C1、C2。
  * 新聞只顯示規則式整理（RSS 標題、摘要、連結），不標成 AI 摘要；報告 AI 初稿未接入時停在「已送出」。 */
-var NEWS_ON=SRV.mode==='server'&&!!(STAT.news&&STAT.news.enabled);
-var REP_ON=SRV.mode==='server'&&!!(STAT.reports&&STAT.reports.enabled);
+/* Pages（2026-10-27）：新聞走後端 /api/news（Google 新聞 RSS），報告走 /api/reports；後端未開通時各區塊顯示「尚未提供」（見 newsErr／repErr 的 NOT_PROVIDED） */
+var NEWS_ON=PAGES||SRV.mode==='server'&&!!(STAT.news&&STAT.news.enabled);
+var REP_ON=PAGES||SRV.mode==='server'&&!!(STAT.reports&&STAT.reports.enabled);
+var NEWS_SRC='來源：Google 新聞（每 30 分鐘更新）';
 NEWS_OFF=PAGES?OFFZH:(SRV.mode!=='server'?'新聞需連上主機才能顯示（目前為本機模式）。':'新聞服務尚未啟用。');
-var LIMIT_ZH={RSS_METADATA_ONLY:'僅 RSS 標題與摘要',BODY_UNAVAILABLE:'未取得新聞全文',SOURCE_DISABLED_BY_USER:'來源已停用'};
-var REQ_ZH={SUBMITTED:'已送出（等待人工／AI 初稿）',DRAFTING:'初稿中',REVIEWING:'審核中',RECHECKING:'覆核中',PUBLISHED:'已發布',FAILED:'失敗',CANCELLED:'已取消'};
-var REQ_ACTIVE=['SUBMITTED','DRAFTING','REVIEWING','RECHECKING'];
+var LIMIT_ZH={RSS_METADATA_ONLY:'僅 RSS 標題與摘要',BODY_UNAVAILABLE:'未取得新聞全文',SOURCE_DISABLED_BY_USER:'來源已停用',TITLE_ONLY:'僅標題與連結',STALE:'暫時無法更新，顯示上次擷取結果'};
+var REQ_ZH={SUBMITTED:'已送出（等待人工／AI 初稿）',DRAFTING:'初稿中',REVIEWING:'審核中',RECHECKING:'覆核中',PUBLISHED:'已發布',FAILED:'失敗',CANCELLED:'已取消',QUEUED:'排隊中',RUNNING:'產生中',DONE:'已完成'};
+var REQ_ACTIVE=['SUBMITTED','DRAFTING','REVIEWING','RECHECKING','QUEUED','RUNNING'];
 var IN_ALLOW=['.pdf','.md','.txt','.docx','.xlsx','.png','.jpg','.jpeg'],IN_MAX=20*1024*1024;
 var NC={},RC={},PC={},IC={},NSRC={r:null,loading:false};
 function ymdOff(i){var n=new Date();return ymd(new Date(n.getFullYear(),n.getMonth(),n.getDate()-(i||0)));}
 function tpTime(iso){if(!iso)return '—';var d=new Date(iso);if(isNaN(d))return '—';return d.toLocaleString('zh-TW',{timeZone:'Asia/Taipei',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});}
-function safeUrl(u){return /^https?:\/\//i.test(String(u||''))?String(u):'#';}
+function safeUrl(u){return /^https:\/\//i.test(String(u||''))?String(u):'#';} /* 只放行 https（2026-10-27） */
 function cached(store,key,path,then){
   var c=store[key];if(c&&(c.r||c.loading))return c;
   c=store[key]={loading:true,r:null};
@@ -1198,14 +1212,14 @@ function cached(store,key,path,then){
 function newsErr(r){
   var code=r&&r.data&&r.data.error_code;
   if(!r||!r.status)return '新聞載入失敗（連線中斷），請稍後重新整理。';
-  return {NEWS_DISABLED:'新聞服務尚未啟用。',NEWS_GROUP_NOT_FOUND:'這個關鍵字組尚未存到主機，請到「新聞關鍵字設定」按儲存。',STOCK_NOT_WATCHED:'此公司不在自選群組，沒有個股新聞。',INVALID_NEWS_QUERY:'新聞日期或顯示區間不正確。',COMPANY_NOT_FOUND:'找不到公司。'}[code]||('新聞載入失敗：'+errMsg(r));
+  return {NOT_PROVIDED:'新聞尚未提供（後端尚未開通）。',NEWS_NO_KEYWORDS:'這組尚未設定關鍵字，請到「新聞關鍵字設定」新增。',RATE_LIMITED:'請求太頻繁，請稍後再試。',NEWS_DISABLED:'新聞服務尚未啟用。',NEWS_GROUP_NOT_FOUND:'這個關鍵字組尚未存到主機，請到「新聞關鍵字設定」按儲存。',STOCK_NOT_WATCHED:'此公司不在自選群組，沒有個股新聞。',INVALID_NEWS_QUERY:'新聞日期或顯示區間不正確。',COMPANY_NOT_FOUND:'找不到公司。'}[code]||('新聞載入失敗：'+errMsg(r));
 }
 function limitTags(arr){return (arr||[]).map(function(x){return '<span class="tag" style="background:var(--line);color:var(--text2)">'+esc(LIMIT_ZH[x]||x)+'</span>';}).join(' ');}
 function artHtml(a,compact){
   var tb=a.timezone_basis&&a.timezone_basis!=='SOURCE_RFC822'?'（時間依據：'+(a.timezone_basis==='ASSUMED_ASIA_TAIPEI'?'推定台灣時間':'擷取時間')+'）':'';
   return '<div class="nart" style="border-top:1px solid var(--line);padding:6px 0;display:flex;flex-direction:column;gap:2px;min-width:0">'+
     '<div style="display:flex;gap:6px;align-items:baseline;min-width:0">'+(a.citation?'<span class="cite2">〔'+esc(a.citation)+'〕</span>':'')+
-    '<a href="'+esc(safeUrl(a.url))+'" target="_blank" rel="noopener noreferrer" style="min-width:0;overflow:hidden;text-overflow:ellipsis'+(compact?';white-space:nowrap':'')+'">'+esc(a.title)+'</a></div>'+
+    (safeUrl(a.url)!=='#'?'<a href="'+esc(safeUrl(a.url))+'" target="_blank" rel="noopener noreferrer" style="min-width:0;overflow:hidden;text-overflow:ellipsis'+(compact?';white-space:nowrap':'')+'">'+esc(a.title)+'</a>':'<span title="連結不是 https，不提供開啟" style="min-width:0;overflow:hidden;text-overflow:ellipsis'+(compact?';white-space:nowrap':'')+'">'+esc(a.title)+'</span>')+'</div>'+
     '<div class="sub">'+esc(a.source_name||a.source_id||'')+'｜'+esc(tpTime(a.published_at_taipei||a.published_at_utc))+esc(tb)+(a.matched_keywords&&a.matched_keywords.length&&!compact?'｜符合：'+esc(a.matched_keywords.join('、')):'')+'</div>'+
     (compact?(a.summary_15?'<div style="font-size:12px;color:var(--text2)">'+esc(a.summary_15)+'</div>':''):(a.summary_30?'<div style="font-size:12px;color:var(--text2)">'+esc(a.summary_30)+'</div>':''))+'</div>';
 }
@@ -1232,7 +1246,7 @@ hNews=function(){
   if(!NEWS_ON)return;
   $('h-news').innerHTML=NS.groups.map(function(g){
     var c=indNews(g,function(){if(curPage==='home')hNews();});
-    return '<div class="card"><div style="display:flex;align-items:baseline;gap:8px;min-width:0"><h2 style="white-space:nowrap">產業新聞</h2><span class="kw" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">｜'+esc(g.kw.join('、')||'（尚未設定關鍵字）')+'</span></div>'+newsList(c,5,false)+'<div style="display:flex;gap:8px;align-items:center"><a href="#/news/g'+esc(g.id)+'" style="font-size:12px">新聞頁</a><span class="sub">規則式整理（非 AI）</span></div></div>';
+    return '<div class="card"><div style="display:flex;align-items:baseline;gap:8px;min-width:0"><h2 style="white-space:nowrap">產業新聞</h2><span class="kw" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">｜'+esc(g.kw.join('、')||'（尚未設定關鍵字）')+'</span></div>'+newsList(c,5,false)+'<div style="display:flex;gap:8px;align-items:center"><a href="#/news/g'+esc(g.id)+'" style="font-size:12px">新聞頁</a><span class="sub">'+(PAGES?NEWS_SRC:'規則式整理（非 AI）')+'</span></div></div>';
   }).join('')||'<div class="placeholder">尚未設定產業新聞關鍵字組，可到「新聞關鍵字設定」新增。</div>';
 };
 var _sNews=sNews;
@@ -1245,7 +1259,8 @@ var _nRender=nRender;
 nRender=function(kw){
   _nRender(kw);
   if(!NEWS_ON){$('n-banner2').textContent=NEWS_OFF;$('n-main').innerHTML='<div class="placeholder">'+esc(NEWS_OFF)+'</div>';return;}
-  $('n-banner2').textContent='規則式整理（不是 AI 摘要）；只保存標題、RSS 摘要與連結，不保存新聞全文';
+  if(PAGES){nsrcLoad(function(){if(curPage==='news')nRender(NP.kw);});$('n-banner2').textContent=NSRC.r&&!NSRC.r.ok&&NSRC.r.data&&NSRC.r.data.error_code==='NOT_PROVIDED'?'新聞尚未提供（後端尚未開通）。':NEWS_SRC+'；只列標題與連結，不保存新聞全文';}
+  else $('n-banner2').textContent='規則式整理（不是 AI 摘要）；只保存標題、RSS 摘要與連結，不保存新聞全文';
   var isStock=NP.kw.charAt(0)==='s',date=ymdOff(+$('n-date').value||0),c,title;
   if(isStock){
     var sid=NP.kw.slice(1),inW=watchIds().indexOf(sid)>=0;title=(BYID[sid]?sid+' '+BYID[sid].name:sid)+'｜'+(inW?stockKw(sid).kw.join('、'):'未追蹤');
@@ -1269,17 +1284,22 @@ nRender=function(kw){
   $('n-src').innerHTML=Object.keys(srcCount).map(function(k){return '<div style="display:flex;gap:6px"><span>'+esc(k)+'</span><span class="grow"></span><span class="mono">'+srcCount[k]+' 則</span></div>';}).join('')||'<div class="placeholder">本區間沒有收錄來源。</div>';
 };
 $('n-date').addEventListener('change',function(){if(curPage==='news'&&NEWS_ON)nRender(NP.kw);});
+/* 新聞來源清單：整頁共用一次（新聞頁的「尚未提供」判斷與新聞設定頁都用） */
+var NSRC_CB=[];
+function nsrcLoad(then){if(NSRC.r)return;if(then)NSRC_CB.push(then);if(NSRC.loading)return;NSRC.loading=true;
+  var done=function(r){NSRC.loading=false;NSRC.r=r;var cb=NSRC_CB;NSRC_CB=[];cb.forEach(function(f){f();});};
+  KupeiAPI.req('GET','/news/sources').then(done,function(){done({ok:false,status:0});});}
 var _nsRender=nsRender;
 nsRender=function(){
   _nsRender();
   if(!NEWS_ON){$('ns-src').innerHTML='<div class="placeholder">'+esc(NEWS_OFF)+'</div>';return;}
-  if(!NSRC.r&&!NSRC.loading){NSRC.loading=true;KupeiAPI.req('GET','/news/sources').then(function(r){NSRC.loading=false;NSRC.r=r;if(curPage==='news-settings')nsRender();},function(){NSRC.loading=false;NSRC.r={ok:false,status:0};if(curPage==='news-settings')nsRender();});}
+  nsrcLoad(function(){if(curPage==='news-settings')nsRender();});
   if(!NSRC.r){$('ns-src').innerHTML='<div class="placeholder">來源清單載入中…</div>';return;}
   if(!NSRC.r.ok){$('ns-src').innerHTML='<div class="placeholder">'+esc(newsErr(NSRC.r))+'</div>';return;}
   var all=(NSRC.r.data&&NSRC.r.data.sources)||[],fetched=all.filter(function(s){return s.enabled===true;}),links=all.filter(function(s){return s.enabled!==true;});
   $('ns-src').innerHTML=(fetched.length?fetched.map(function(s){var off=(NS.disabled||[]).indexOf(s.source_id)>=0;
-    return '<label class="chk" title="'+esc(s.usage||'')+'"><input type="checkbox" data-nsrc="'+esc(s.source_id)+'"'+(off?'':' checked')+'>'+esc(s.name)+'<span class="sub">（'+esc(LIMIT_ZH[s.content_scope]||s.content_scope||'')+'）</span></label>';}).join(''):'<div class="placeholder">目前沒有可自動擷取的來源。</div>')+
-    '<div class="placeholder">取消勾選即停用該來源；擷取白名單由後端維護，這裡不能新增。</div>'+
+    return '<label class="chk" title="'+esc(s.usage||'')+'"><input type="checkbox" data-nsrc="'+esc(s.source_id)+'"'+(off?'':' checked')+'>'+esc(s.name)+'<span class="sub">（'+esc(LIMIT_ZH[s.content_scope]||s.content_scope||'')+'）</span>'+(PAGES&&safeUrl(s.url)!=='#'?' <a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer" class="sub">網站</a>':'')+'</label>';}).join(''):'<div class="placeholder">目前沒有可自動擷取的來源。</div>')+
+    '<div class="placeholder">取消勾選即停用該來源'+(PAGES?'（只影響這台瀏覽器與帳號的顯示；'+NEWS_SRC+'）':'')+'；擷取白名單由後端維護，這裡不能新增。</div>'+
     (links.length?'<div style="grid-column:1/-1;margin-top:6px"><span class="sub">外部連結（不自動擷取，只提供網站入口）</span>'+links.map(function(s){return '<div style="font-size:12px;padding:2px 0"><a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer">'+esc(s.name)+'</a><span class="sub">｜'+esc(s.usage||'')+'</span></div>';}).join('')+'</div>':'');
 };
 document.addEventListener('change',function(e){var t=e.target;if(!t.dataset||!t.dataset.nsrc)return;var id=t.dataset.nsrc;NS.disabled=(NS.disabled||[]).filter(function(x){return x!==id;});if(!t.checked)NS.disabled.push(id);saveNS();});
@@ -1288,12 +1308,14 @@ var _saveNS3=saveNS;saveNS=function(){NC={};_saveNS3();};
 function repErr(r){
   var code=r&&r.data&&r.data.error_code;
   if(!r||!r.status)return '連線中斷，請稍後重新整理。';
-  return {REPORTS_DISABLED:'報告服務尚未啟用（主機尚未設定報告根目錄）。',REPORT_NOT_FOUND:'找不到已發布報告。',STOCK_NOT_WATCHED:'此公司不在自選群組。',REPORT_ALREADY_ACTIVE:'此公司已有進行中的報告工作。',REPORT_PERIOD_UNAVAILABLE:'期別不在正式發布資料中。',INPUT_TOO_LARGE:'檔案超過 20 MB 上限。',INPUT_TYPE_NOT_ALLOWED:'不支援的檔案類型。',INPUT_TYPE_MISMATCH:'檔案內容與副檔名不符，請確認檔案格式。',PAYLOAD_TOO_LARGE:'檔案超過 20 MB 上限。',INVALID_FILENAME:'檔名不正確。',INPUT_FILE_REQUIRED:'請選擇檔案。',INPUT_NOT_FOUND:'找不到參考資料。'}[code]||(r.status===413?'檔案過大。':errMsg(r));
+  return {NOT_PROVIDED:'報告尚未提供（後端尚未開通）。',QUOTA_EXCEEDED:'報告請求已達上限（最多 20 筆），請等現有請求完成後再試。',UNAUTHENTICATED:'需要登入帳號。',RATE_LIMITED:'請求太頻繁，請稍後再試。',REPORTS_DISABLED:'報告服務尚未啟用（主機尚未設定報告根目錄）。',REPORT_NOT_FOUND:'找不到已發布報告。',STOCK_NOT_WATCHED:'此公司不在自選群組。',REPORT_ALREADY_ACTIVE:'此公司已有進行中的報告工作。',REPORT_PERIOD_UNAVAILABLE:'期別不在正式發布資料中。',INPUT_TOO_LARGE:'檔案超過 20 MB 上限。',INPUT_TYPE_NOT_ALLOWED:'不支援的檔案類型。',INPUT_TYPE_MISMATCH:'檔案內容與副檔名不符，請確認檔案格式。',PAYLOAD_TOO_LARGE:'檔案超過 20 MB 上限。',INVALID_FILENAME:'檔名不正確。',INPUT_FILE_REQUIRED:'請選擇檔案。',INPUT_NOT_FOUND:'找不到參考資料。'}[code]||(r.status===413?'檔案過大。':errMsg(r));
 }
 function repLoad(id,force,then){if(force)delete RC[id];return cached(RC,id,'/reports/'+encodeURIComponent(id),then);}
 function inLoad(id,force,then){if(force)delete IC[id];return cached(IC,id,'/reports/'+encodeURIComponent(id)+'/inputs',then);}
 function pubLoad(id,p,rev,then){return cached(PC,id+'|'+p+'|'+rev,'/reports/'+encodeURIComponent(id)+'/'+encodeURIComponent(p)+'/'+encodeURIComponent(rev),then);}
-function reqLine(q){if(!q)return '';return '目前工作：'+esc(REQ_ZH[q.status]||q.status)+'｜期別 '+esc(q.period)+'｜送出 '+esc(tpTime(q.created_at))+(q.status==='SUBMITTED'?'｜AI 初稿尚未接入，由人工交接處理':'');}
+function reqLine(q){if(!q)return '';return '目前工作：'+esc(REQ_ZH[q.status]||q.status)+'｜期別 '+esc(q.period)+'｜送出 '+esc(tpTime(q.created_at))+(q.status==='SUBMITTED'?'｜AI 初稿尚未接入，由人工交接處理':'')+(q.message?'｜'+esc(q.message):'');}
+var REP_ST={DRAFT:'（草稿）',FAILED:'（失敗）'};
+function repLabel(p){return esc(p.period)+' '+esc(p.revision)+(REP_ST[p.status]||'');}
 function fmtSize(n){return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';}
 var _sReport=sReport;
 sReport=function(id){
@@ -1303,7 +1325,7 @@ sReport=function(id){
   if(!c.r.ok){$('s-reptag').textContent='錯誤';$('s-period').innerHTML='<option>—</option>';$('s-period').disabled=true;$('s-report').innerHTML='<div class="placeholder">'+esc(repErr(c.r))+'</div>';return;}
   var d=c.r.data||{},ps=d.periods||[],q=d.current_request,sel=Math.min(c.sel||0,Math.max(0,ps.length-1));
   $('s-reptag').textContent=q&&REQ_ACTIVE.indexOf(q.status)>=0?(REQ_ZH[q.status]||q.status):(ps.length?'已發布':'尚無報告');
-  $('s-period').innerHTML=ps.length?ps.map(function(p,i){return '<option value="'+i+'"'+(i===sel?' selected':'')+'>'+esc(p.period)+' '+esc(p.revision)+'</option>';}).join(''):'<option>—</option>';
+  $('s-period').innerHTML=ps.length?ps.map(function(p,i){return '<option value="'+i+'"'+(i===sel?' selected':'')+'>'+repLabel(p)+'</option>';}).join(''):'<option>—</option>';
   $('s-period').disabled=ps.length<2;
   var h=q&&REQ_ACTIVE.indexOf(q.status)>=0?'<div class="sub">'+reqLine(q)+'</div>':'';
   var p=ps[sel];
@@ -1344,6 +1366,16 @@ rRender=function(id){
   if(pc.loading){$('r-body').innerHTML='<div class="placeholder">報告載入中…</div>';return;}
   if(!pc.r.ok){$('r-body').innerHTML='<div class="placeholder">'+esc(repErr(pc.r))+'</div>';return;}
   var d=pc.r.data||{},toc=[],pt=d.pointer||{};
+  if(PAGES){
+    /* Pages：summary 一律當純文字（跳脫後只把換行轉 <br>，不解析 markdown）；連結只放 https */
+    $('r-sub').textContent=p+'｜'+rev+(REP_ST[d.status]||'')+'｜產生 '+tpTime(pt.published_at)+'｜'+(d.title||'—');
+    var fl=(d.files||[]).map(function(f){return '<li>'+(safeUrl(f.url)!=='#'?'<a href="'+esc(safeUrl(f.url))+'" target="_blank" rel="noopener noreferrer">'+esc(f.name)+'</a>':esc(f.name))+'</li>';}).join('');
+    $('r-body').innerHTML='<div style="border:1px solid var(--line);border-radius:6px;padding:8px"><b>摘要</b><p class="rep-text">'+(d.summary?esc(d.summary).replace(/\r?\n/g,'<br>'):'—')+'</p></div>'+
+      (safeUrl(d.url)!=='#'?'<p><a href="'+esc(safeUrl(d.url))+'" target="_blank" rel="noopener noreferrer">開啟完整報告</a></p>':'')+
+      (fl?'<h2 id="rh-files">檔案</h2><ul>'+fl+'</ul>':'');
+    $('r-toc').innerHTML=fl?'<a href="#" data-rtoc="rh-files">檔案</a>':'<span class="placeholder">無章節</span>';
+    return;
+  }
   $('r-sub').textContent=p+'｜'+rev+'｜發布 '+tpTime(pt.published_at)+'｜分析資料 '+(d.meta&&d.meta.calculation_version||'—');
   var srcs=(d.sources||[]).map(function(s){return '<li><span class="cite">〔'+esc(s.id)+'〕</span> '+(s.url?'<a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer">'+esc(s.title||s.url)+'</a>':esc(s.title||''))+'</li>';}).join('');
   $('r-body').innerHTML='<div style="border:1px solid var(--line);border-radius:6px;padding:8px"><b>摘要</b><p>'+esc(d.summary||'').replace(/\n/g,'<br>')+'</p></div>'+mdHtml(d.report,toc)+(srcs?'<h2 id="rh-src">資料來源</h2><ul>'+srcs+'</ul>':'');
@@ -1360,6 +1392,7 @@ rsRender=function(){
     $('rs-inputs').innerHTML='<div class="placeholder">參考資料'+why+'。</div>';$('rs-history').innerHTML='<div class="placeholder">'+why+'。</div>';return;
   }
   var id=RP.id,re=function(){if(curPage==='report-settings'&&RP.id===id)rsRender();};
+  if(PAGES){rsRenderPages(id,re);return;}
   var c=repLoad(id,false,re),ic=inLoad(id,false,re);
   var q=c.r&&c.r.ok&&c.r.data?c.r.data.current_request:null,busy=!!(q&&REQ_ACTIVE.indexOf(q.status)>=0);
   $('rs-genbox').innerHTML='<button class="btn primary" data-repgen="'+esc(id)+'"'+(busy||c.loading?' disabled':'')+' title="'+(busy?'此公司已有進行中的報告工作':'以目前正式分析期別 '+esc(BYID[id].period||'')+' 產生報告')+'">'+(busy?'工作進行中':'產生報告')+'</button>';
@@ -1377,6 +1410,34 @@ rsRender=function(){
   else{var ps=(c.r.data&&c.r.data.periods)||[];hh=ps.length?ps.map(function(p){return '<div style="display:flex;gap:8px"><a href="#/report/'+esc(id)+'/'+esc(p.period)+'/'+esc(p.revision)+'">'+esc(p.period)+' '+esc(p.revision)+'</a><span class="sub">發布 '+esc(tpTime(p.published_at))+'</span></div>';}).join(''):'<div class="placeholder">尚無已發布報告。</div>';}
   $('rs-history').innerHTML=hh;
 };
+/* Pages 報告設定：產生請求（只限登入帳號）、歷次報告、自己的請求；不支援上傳參考資料 */
+function rsRenderPages(id,re){
+  var c=repLoad(id,false,re),A=window.KupeiAuth,login=!!(A&&A.loggedIn&&A.loggedIn());
+  if(c.lg==null)c.lg=login;else if(c.lg!==login){c=repLoad(id,true,re);c.lg=login;} /* 登入狀態變了：重讀（自己的請求只有登入後讀得到） */
+  var d=c.r&&c.r.ok&&c.r.data?c.r.data:null,q=d?d.current_request:null,busy=!!(q&&REQ_ACTIVE.indexOf(q.status)>=0);
+  $('rs-genbox').innerHTML='<button class="btn primary" data-repgen="'+esc(id)+'"'+(busy||c.loading?' disabled':'')+' title="'+(busy?'此公司已有排隊中的報告請求':'以目前正式分析期別 '+esc(BYID[id].period||'')+' 送出產生請求')+'">'+(busy?'請求排隊中':login?'產生報告':'產生報告（需登入）')+'</button>';
+  $('rs-reqstate').innerHTML=busy?reqLine(q):(c.r&&!c.r.ok?esc(repErr(c.r)):(login?'':'送出產生請求需要登入帳號（左側「帳號」）。'));
+  $('rs-inputs').innerHTML='<div class="placeholder">參考資料上傳尚未提供。</div>';
+  var hh;
+  if(c.loading)hh='<div class="placeholder">載入中…</div>';
+  else if(!c.r.ok)hh='<div class="placeholder">'+esc(repErr(c.r))+'</div>';
+  else{var ps=d.periods||[],fs=d.failed||[];
+    hh=ps.length?ps.map(function(p){return '<div style="display:flex;gap:8px"><a href="#/report/'+esc(id)+'/'+esc(p.period)+'/'+esc(p.revision)+'">'+repLabel(p)+'</a><span class="sub">產生 '+esc(tpTime(p.published_at))+(p.title?'｜'+esc(p.title):'')+'</span></div>';}).join(''):'<div class="placeholder">尚無報告。</div>';
+    if(fs.length)hh+='<div class="sub">另有 '+fs.length+' 份產生失敗：'+fs.map(function(p){return repLabel(p);}).join('、')+'</div>';
+    var rq=d.requests;
+    hh+='<div class="sub" style="margin-top:6px">我的請求</div>'+(rq==null?'<div class="placeholder">'+(login?'請求紀錄暫時無法讀取。':'登入帳號後顯示自己的請求。')+'</div>':rq.length?rq.slice(0,20).map(function(r){return '<div class="sub" style="padding:2px 0">'+esc(r.period)+'｜'+esc(REQ_ZH[r.status]||r.status)+'｜送出 '+esc(tpTime(r.created_at))+(r.updated_at?'｜更新 '+esc(tpTime(r.updated_at)):'')+(r.message?'｜'+esc(r.message):'')+'</div>';}).join(''):'<div class="placeholder">尚無請求。</div>');}
+  $('rs-history').innerHTML=hh;
+}
+function repGenPages(id,btn){
+  var A=window.KupeiAuth;
+  if(!A||!A.loggedIn||!A.loggedIn()){toast('產生報告需要登入帳號');btn.disabled=false;if(A&&A.openLogin)A.openLogin();return;}
+  KupeiAPI.req('POST','/reports/'+encodeURIComponent(id)+'/requests',{period:BYID[id].period,trigger:'MANUAL'}).then(function(r){
+    if(r.ok)toast(r.status===202?'已送出報告請求（排隊中）':'已有排隊中的同期別請求，沿用同一筆');
+    else if(r.status===401){toast('登入已過期，請重新登入');if(A.openLogin)A.openLogin();}
+    else toast('無法送出：'+repErr(r));
+    repRefresh(id);
+  },function(){toast('送出結果不明（連線中斷），已重新查詢');repRefresh(id);});
+}
 function repRefresh(id){repLoad(id,true,function(){if(curPage==='report-settings')rsRender();});}
 function inRefresh(id){inLoad(id,true,function(){if(curPage==='report-settings')rsRender();});}
 function upload(id,file){
@@ -1397,6 +1458,7 @@ document.addEventListener('click',function(e){
   var t=e.target.closest('[data-repgen],[data-inrm],[data-inadd]');if(!t)return;var d=t.dataset;
   if(d.repgen){
     var id=d.repgen;t.disabled=true;
+    if(PAGES){repGenPages(id,t);return;}
     srvWrite('POST','/reports/'+encodeURIComponent(id)+'/requests',{period:BYID[id].period,trigger:'MANUAL'},
       {idem:uuid(),onConflict:function(){repRefresh(id);},onFail:function(r){toast('無法送出：'+repErr(r));repRefresh(id);}},
       function(){toast('已送出報告請求（等待人工／AI 初稿）');repRefresh(id);});
