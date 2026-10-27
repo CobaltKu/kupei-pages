@@ -36,7 +36,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 3. **所有請求都帶 `Authorization: Bearer <權杖>`。** 沒有權杖或權杖錯誤是 401，不是程式壞了，請提示使用者檢查 `.env.local`。
 4. **先讀 `/data/manifest.json` 取得批次編號 `run`**，再讀 `/data/<run>/...`。不要把批次編號寫死。
 5. **控制請求量：**
-   - `/api/market/*` 每個 IP 每分鐘最多 30 次、`/api/store*` 60 次、註冊＋登入＋改密碼＋重設密碼 10 次，超過回 429。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
+   - `/api/market/*` 每個 IP 每分鐘最多 30 次、`/api/store*` 60 次、註冊＋登入＋改密碼＋重設密碼 10 次、`/api/news` 沒命中快取的新查詢 6 次，超過回 429（都帶 `Retry-After: 30`）。不要輪詢、不要在元件每次渲染時請求。`history` 一次最多 30 檔，用批次的方式取。
    - `/data/*` 是靜態檔，不限次數；`summary.json` 讀一次後放在記憶體，不要每個畫面重抓。
 6. **遇到錯誤時：**
    - 429：等 `Retry-After` 秒數後再試，不要立刻重送。
@@ -152,7 +152,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 - **邀請碼**（2026-10-26 新增）：維護者可以把「註冊需要邀請碼」打開。打開時 `register` 要帶 `inviteCode`，沒帶 403 `INVITE_REQUIRED`、不對 403 `INVITE_INVALID`；關閉時這個欄位被忽略（帶了也沒關係）。註冊畫面打開時先呼叫 `GET /api/auth/config`，`inviteRequired` 為 `true` 才顯示邀請碼欄位。邀請碼本身不會從任何公開端點回傳，由維護者另外給使用者。
 - **改密碼**（2026-10-26 新增）：`POST /api/auth/password`，新密碼規則同註冊（8～128 字）。目前密碼錯 401 `INVALID_CREDENTIALS`（登入權杖不受影響，不要因此把使用者登出）。成功後**這個帳號所有裝置的登入權杖都失效**（包含這台的舊權杖），回應裡是這台的新權杖（30 天）——要立刻換掉存著的權杖；別台裝置下一個請求會收到 401 `UNAUTHENTICATED`，回到未登入。
 - **忘記密碼**（2026-10-27 新增）：帳號沒有 Email，所以由維護者在帳號管理頁產生**一次性重設碼**（12 字元，顯示成 `XXXX-XXXX-XXXX`，只用數字與不易混淆的大寫字母），私下交給使用者。使用者在 App 輸入帳號、重設碼、新密碼，呼叫 `POST /api/auth/reset`。重設碼 **24 小時**內有效、**只能用一次**；維護者再產生一組會讓舊的失效。比對時去掉 `-` 與空白、不分大小寫。成功：設新密碼、**這個帳號所有裝置的登入權杖都失效**、回應是這台的新權杖（同 login，直接是登入狀態）。帳號不存在、重設碼不對、過期、已用過、帳號停用 → 一律 401 `INVALID_CREDENTIALS`（不透露是哪一種）；帳號或新密碼格式不對 400 `BAD_REQUEST`（先驗格式）。
-- **限流**：註冊＋登入＋改密碼＋重設密碼合計每個 IP 每分鐘 **10 次**（IPv6 以 /64 為一組）；登入與重設密碼另外每個帳號每分鐘 **10 次**（不分 IP，兩者合計），超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
+- **限流**：註冊＋登入＋改密碼＋重設密碼合計每個 IP 每分鐘 **10 次**（IPv6 以 /64 為一組）；登入與重設密碼另外每個帳號每分鐘 **30 次**（不分 IP，兩者合計；2026-10-28 從 10 次調高，避免別人拿你的帳號名一直打就讓你登不進來），超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
 - 不需要 `X-Requested-With`；CORS 與其他端點相同（預檢允許 `POST`）。
 - **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對；重設密碼時＝帳號或重設碼不對、過期、已用過或帳號停用）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
 - **帳號被停用**：維護者可以停用帳號（所有裝置立刻登出、之後登入一律 401 `INVALID_CREDENTIALS`；雲端文件保留，恢復後照舊）。
@@ -212,7 +212,7 @@ await kupei.auth.logout()
 | `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }` |
 | `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404 |
 | `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50 |
-| `PATCH` | `/api/reports/requests/<id>` | 本文 `{ status: "RUNNING"\|"DONE"\|"FAILED", message?: ≤500 字 }` → `{ status: "ok" }`；沒有這筆 404 |
+| `PATCH` | `/api/reports/requests/<id>` | 本文 `{ status: "RUNNING"\|"DONE"\|"FAILED", message?: ≤500 字 }` → `{ status: "ok" }`；沒有這筆 404。**狀態只能照順序改**（2026-10-28 起）：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，或 `QUEUED`→`FAILED`；`DONE`、`FAILED` 之後不能再改。不合順序（例如 `QUEUED` 直接 `DONE`）**409** `INVALID_TRANSITION`，`details: { from, to }`——管線要先 PATCH `RUNNING`。建立超過 90 天的 `DONE`／`FAILED` 會被自動清掉 |
 
 推送權杖錯或沒帶 → 401（不帶 CORS）。用唯讀、寫入、登入權杖打這四個也是 401。
 
@@ -233,8 +233,9 @@ await kupei.auth.logout()
 | 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
 | 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }` |
-| 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過 300 KB |
-| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 10 次）。IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
+| 409 | `INVALID_TRANSITION` | 報告請求的狀態不能這樣改（推送權杖的 `PATCH /api/reports/requests/<id>`）；`error.details` 是 `{ from, to }` |
+| 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過上限：雲端文件 300 KB、帳號端點（`/api/auth/*`）4 KB、報告請求 4 KB |
+| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 30 次）；`/api/news` 沒命中快取的新查詢 6 次。IPv6 以 /64 為一組，超過一律帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
 | 502 | `UPSTREAM_ERROR` | `/api/news` 的新聞來源暫時抓不到、伺服器也沒有舊結果；稍後再試（不要立刻重送） |
 | 404 | `NOT_FOUND` | 刪除不存在的文件、沒有這份報告（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 
@@ -256,6 +257,8 @@ await kupei.auth.logout()
 | 逾時 | 每個請求 20 秒 | 不會無限等 |
 
 不帶 `?v=` 的批次檔請求仍回 `no-cache`（每次驗證），能用但慢；**請一律帶版本**。
+
+`HEAD`（2026-10-28 起）：所有 `/api/*` 的 `HEAD` 與 `GET` 一樣驗權杖、計入限流、回同樣的狀態碼與標頭，只是沒有本文；`/data/*` 的 `HEAD` 照常。一般不需要用 `HEAD`，直接 `GET` 即可。
 
 ## 開發建議
 

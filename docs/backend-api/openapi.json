@@ -3,7 +3,7 @@
   "info": {
     "title": "KuPei 唯讀 API",
     "version": "1.0.0",
-    "description": "評分資料與每日收盤行情的唯讀介面。人類可讀的說明、資料型別與排序規則見 KuPei-API.md。 使用者帳號（/api/auth/*）登入後可讀寫自己的雲端文件。"
+    "description": "評分資料與每日收盤行情的唯讀介面。人類可讀的說明、資料型別與排序規則見 KuPei-API.md。 使用者帳號（/api/auth/*）登入後可讀寫自己的雲端文件。 所有 /api/* 的 HEAD 與 GET 相同（權杖、權限、限流、狀態碼與標頭），只是沒有本文。"
   },
   "servers": [
     {
@@ -56,7 +56,8 @@
                   "INVALID_CREDENTIALS",
                   "USERNAME_TAKEN",
                   "INVITE_REQUIRED",
-                  "INVITE_INVALID"
+                  "INVITE_INVALID",
+                  "INVALID_TRANSITION"
                 ]
               },
               "message": {
@@ -1087,7 +1088,7 @@
         }
       },
       "AuthRateLimited": {
-        "description": "註冊＋登入＋改密碼合計每個 IP 每分鐘 10 次；回應帶 Retry-After: 30",
+        "description": "註冊＋登入＋改密碼＋重設密碼合計每個 IP 每分鐘 10 次；登入與重設另外每個帳號名每分鐘 30 次（不分 IP）；回應帶 Retry-After: 30",
         "headers": {
           "Retry-After": {
             "schema": {
@@ -1997,6 +1998,16 @@
           },
           "429": {
             "$ref": "#/components/responses/AuthRateLimited"
+          },
+          "413": {
+            "description": "本文超過 4 KB（TOO_LARGE）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2048,6 +2059,16 @@
           },
           "429": {
             "$ref": "#/components/responses/AuthRateLimited"
+          },
+          "413": {
+            "description": "本文超過 4 KB（TOO_LARGE）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2157,6 +2178,16 @@
           },
           "429": {
             "$ref": "#/components/responses/AuthRateLimited"
+          },
+          "413": {
+            "description": "本文超過 4 KB（TOO_LARGE）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2209,6 +2240,16 @@
           },
           "429": {
             "$ref": "#/components/responses/AuthRateLimited"
+          },
+          "413": {
+            "description": "本文超過 4 KB（TOO_LARGE）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2300,7 +2341,21 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "429": {
-            "$ref": "#/components/responses/TooManyRequests"
+            "description": "每個 IP 每分鐘 30 次（/api/* 合計），或沒命中快取的新查詢每 IP 每分鐘 6 次且沒有舊結果可回；回應帶 Retry-After: 30",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "502": {
             "description": "新聞來源抓不到且沒有舊結果（UPSTREAM_ERROR）",
@@ -2866,8 +2921,19 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "狀態不能這樣改（INVALID_TRANSITION）：只允許 QUEUED→RUNNING→DONE／FAILED 與 QUEUED→FAILED，DONE、FAILED 為終態；details 為 { from, to }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "2026-10-28 起檢查狀態轉移（409 INVALID_TRANSITION）。建立超過 90 天的 DONE／FAILED 請求在 PATCH 時順便清掉（一次最多 20 筆）。"
       }
     }
   }

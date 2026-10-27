@@ -1,5 +1,5 @@
 // 畫面修正的回歸測試（2026-10-28 線上實測找到的 bug）。評分與收盤行情用線上資料，盤中端點用假的回應；不寫入任何資料、不建立帳號。
-// BASE=http://127.0.0.1:5432/（無權杖版建置）ENVFILE=<含 VITE_KUPEI_TOKEN 的檔> node e2e_pages_ui.mjs（SHOTS=<資料夾> 另存截圖）
+// BASE=http://127.0.0.1:5433/（無權杖版建置）ENVFILE=<含 VITE_KUPEI_TOKEN 的檔> node e2e_pages_ui.mjs（SHOTS=<資料夾> 另存截圖）
 import { chromium } from 'playwright'
 import fs from 'node:fs'
 const ENV = Object.fromEntries(fs.readFileSync(process.env.ENVFILE, 'utf8').split('\n').map((l) => l.replace('\r', '')).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
