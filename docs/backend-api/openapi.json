@@ -229,6 +229,26 @@
                 "nullable": true
               }
             }
+          },
+          "source": {
+            "type": "object",
+            "description": "各市場最新交易日的收盤資料來源（選填，K-30）。finmind＝FinMind（頁面要標示「資料來源：FinMind」）；exchange＝證交所／櫃買中心",
+            "properties": {
+              "L": {
+                "type": "string",
+                "enum": [
+                  "finmind",
+                  "exchange"
+                ]
+              },
+              "O": {
+                "type": "string",
+                "enum": [
+                  "finmind",
+                  "exchange"
+                ]
+              }
+            }
           }
         }
       },
@@ -457,6 +477,26 @@
             "description": "最近 12 次抓取結果",
             "items": {
               "type": "object"
+            }
+          },
+          "source": {
+            "type": "object",
+            "description": "各市場最新交易日的收盤資料來源（選填，K-30）。finmind＝FinMind（頁面要標示「資料來源：FinMind」）；exchange＝證交所／櫃買中心",
+            "properties": {
+              "L": {
+                "type": "string",
+                "enum": [
+                  "finmind",
+                  "exchange"
+                ]
+              },
+              "O": {
+                "type": "string",
+                "enum": [
+                  "finmind",
+                  "exchange"
+                ]
+              }
             }
           }
         }
@@ -1482,7 +1522,8 @@
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           }
-        }
+        },
+        "description": "每日收盤（非即時）。日收盤、月營收、交易日曆資料來源：FinMind（僅在授權範圍內顯示；FinMind 條款要求標示來源），備援為證交所／櫃買中心；`source` 欄位標示各市場最新交易日實際來自哪裡。"
       }
     },
     "/api/market/history": {

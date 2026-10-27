@@ -13,9 +13,12 @@ $('loading').hidden=false;
 /* 行情與評分並行；首頁資料到了之後最多再等行情 600ms，讓第一次畫面就有收盤價（不先畫「—」再整欄改寫） */
 var homeP=KupeiAPI.home(),quoteP=KupeiAPI.req('GET','/quotes').catch(function(){return null;});
 var quoteSoon=homeP.then(function(){return Promise.race([quoteP,new Promise(function(r){setTimeout(function(){r(null);},600);})]);},function(){return null;});
-Promise.all([homeP,KupeiAPI.status(),KupeiAPI.notes(),KupeiAPI.req('GET','/watchlist').catch(function(){return {ok:false};}),KupeiAPI.req('GET','/auth/session').catch(function(){return {ok:false};}),KupeiAPI.req('GET','/settings/news').catch(function(){return {ok:false};}),quoteSoon]).then(function(res){
+/* 估價（約 644 KB）與評分並行，但不擋首頁：首頁資料到了之後同樣最多再等 600ms，趕上就第一次畫面帶估價（只整表畫一次），趕不上由 vaStart 晚到再補 */
+var valP=KupeiAPI.req('GET','/valuation').catch(function(){return null;});
+var valSoon=homeP.then(function(){return Promise.race([valP,new Promise(function(r){setTimeout(function(){r(null);},600);})]);},function(){return null;});
+Promise.all([homeP,KupeiAPI.status(),KupeiAPI.notes(),KupeiAPI.req('GET','/watchlist').catch(function(){return {ok:false};}),KupeiAPI.req('GET','/auth/session').catch(function(){return {ok:false};}),KupeiAPI.req('GET','/settings/news').catch(function(){return {ok:false};}),quoteSoon,valSoon]).then(function(res){
   $('loading').hidden=true;$('h-err').hidden=true;$('h-wrap').style.display='';
-  main(res[0],res[1]||{},res[2],{watch:res[3],auth:res[4],news:res[5],quotes:res[6]});
+  main(res[0],res[1]||{},res[2],{watch:res[3],auth:res[4],news:res[5],quotes:res[6],val:res[7]});
 }).catch(function(err){if(window.console)console.error(err);bootFail(err);}); /* main 內的例外也要接住，不讓畫面卡在半初始化 */
 
 function main(S,STAT,TRN,SB){
@@ -304,9 +307,11 @@ function doImport(){
 /* ================= 行情（T4：每 30 秒抓取＋SSE；I6） ================= */
 var QT={on:false,st:null,map:{},last:null,tdate:null,dates:null,seq:0,es:null,fails:0,poll:null,t:null,v:0,intra:null,it:null}; /* intra：Pages 盤中快照 {stale,ttl,hm}，收盤／盤前為 null */ /* v：行情版本，畫面快取比對用 */
 var VAL={on:false,map:{},date:null,limitations:[]};
-function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};QT.intra=s.intraday||null;EX.stale=QT.st==='DELAYED'||!!(QT.intra&&QT.intra.stale);if(PAGES){var L=pxLabel();JX0[0][1]=JXW[0][1]=WFX[0][0]=L;}qtSchedule();}
+function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};QT.intra=s.intraday||null;QT.src=s.source||null;EX.stale=QT.st==='DELAYED'||!!(QT.intra&&QT.intra.stale);if(PAGES){var L=pxLabel();JX0[0][1]=JXW[0][1]=WFX[0][0]=L;}qtSchedule();}
 /* 價格欄名稱：Pages 盤中顯示「盤中價」，其餘照 PXL（收盤價／成交價） */
 function pxLabel(){return PAGES&&QT.intra?'盤中價':PXL;}
+/* 收盤資料來源（K-30，條款要求）：任一市場的最新收盤來自 FinMind 就標示 */
+function fmSrc(){var s=(typeof QT!=='undefined'&&QT.src)||(STAT.quotes&&STAT.quotes.source)||{};return s.L==='finmind'||s.O==='finmind';}
 function qtMerge(ev){QT.v++;var q=ev.quotes||{};Object.keys(q).forEach(function(k){QT.map[k]=q[k];});QT.seq=Math.max(QT.seq,ev.seq||0);QT.last=new Date().toISOString();}
 function qtRefresh(){KupeiAPI.req('GET','/quotes').then(function(r){if(r.ok&&!qtSame(r.data)){qtApply(r.data);quotesChanged();}else qtSchedule();},function(){qtSchedule();});}
 /* Pages 盤中（2026-10-27）：後端每 ttlSeconds（約 10 分鐘）更新一次盤中快照，所以只有盤中（phase=OPEN）且分頁可見時，
@@ -325,7 +330,9 @@ function qtStream(){
 function qtSame(s){return QT.on&&s&&s.last_success_at===QT.last&&s.trading_date===QT.tdate&&(s.seq||0)===QT.seq&&s.quotes===QT.map;}
 function qtStart(){KupeiAPI.req('GET','/quotes').then(function(r){if(!r.ok){QT.on=false;updLine();return;}if(!qtSame(r.data)){qtApply(r.data);quotesChanged();}else updLine();if(!PAGES)qtStream(); /* Pages 版：行情一天只更新幾次，不輪詢（串接規範 §4），回到分頁時才刷新 */},function(){updLine();});}
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&QT.on)qtRefresh();});
-function vaStart(){KupeiAPI.req('GET','/valuation').then(function(r){if(!r.ok)return;QT.v++;VAL.on=true;VAL.date=r.data.valuation_date;VAL.map=r.data.companies||{};VAL.limitations=r.data.dataset_limitations||[];Object.keys(r.data.translations||{}).forEach(function(k){TR[k]=r.data.translations[k];});quotesChanged(true);});}
+function vaApply(d){QT.v++;VAL.on=true;VAL.date=d.valuation_date;VAL.map=d.companies||{};VAL.limitations=d.dataset_limitations||[];Object.keys(d.translations||{}).forEach(function(k){TR[k]=d.translations[k];});}
+/* 啟動時已趕上（SB.val）就不再讀；晚到的才重畫目前頁面（status() 不再等估價下載：狀態頁的基準日在這裡補上） */
+function vaStart(){if(VAL.on)return;KupeiAPI.req('GET','/valuation').then(function(r){if(!r.ok||VAL.on)return;vaApply(r.data);quotesChanged(true);if(curPage==='status')stRender();});}
 function hm(iso){if(!iso)return '—';var d=new Date(iso);return isNaN(d)?'—':hhmm(d);}
 function md(s){if(!s)return '—';var p=String(s).slice(0,10).split('-');return p.length===3?(+p[1])+'/'+(+p[2]):s;}
 function qtLabel(){
@@ -339,7 +346,7 @@ function qtLabel(){
   if(QT.st==='CLOSED'){
     /* Pages：每日收盤（非即時）；上市（L）、上櫃（O）收盤日不同時兩個都標 */
     var d=QT.dates||{},both=d.L&&d.O&&d.L!==d.O,tt='每日收盤價，非即時'+(d.L?'；上市 '+d.L:'')+(d.O?'；上櫃 '+d.O:'');
-    return '<span title="'+esc(tt)+'">收盤價 '+(both?'上市 '+esc(md(d.L))+'／上櫃 '+esc(md(d.O)):esc(md(QT.tdate)))+(PAGES?'・非即時':'')+'</span>';
+    return '<span title="'+esc(tt)+'">收盤價 '+(both?'上市 '+esc(md(d.L))+'／上櫃 '+esc(md(d.O)):esc(md(QT.tdate)))+(PAGES?'・非即時':'')+(fmSrc()?'・資料來源：FinMind':'')+'</span>';
   }
   if(QT.st==='DELAYED')return '<span style="color:var(--warn)">⚠ 行情延遲｜最後更新 '+hm(QT.last)+'</span>';
   return '成交價 '+hm(QT.last)+'｜FinMind';
@@ -1079,9 +1086,9 @@ function stRender(){
     ['公司數',all+' 家（已評估 '+(all-na)+'、未評估 '+na+'；可排名 '+ranked+'；首頁不列金融保險業，列出 '+asd+' 家）'],
     ['第二階段處置',Object.keys(p2).map(function(k){return k+' '+p2[k];}).join('、')],
     ['中文對照',TR_OK?'已載入（'+Object.keys(TR).length+' 個代碼）'+(STAT.ui_note_translations_version?'｜'+STAT.ui_note_translations_version:''):'未提供（顯示「待查：代碼」）'],
-    ['行情',q.enabled?({OPEN:'交易中',DELAYED:'延遲',CLOSED:'收盤／休市'}[QT.st||q.market_status]||v(q.market_status))+'｜最後成功 '+(q.last_success_at?new Date(q.last_success_at).toLocaleString('zh-TW',{hour12:false}):'—')+(q.last_error_at?'｜最後失敗 '+new Date(q.last_error_at).toLocaleString('zh-TW',{hour12:false}):'')+'｜判定依據 '+v(q.calendar_basis):'未啟用'],
+    ['行情',q.enabled?({OPEN:'交易中',DELAYED:'延遲',CLOSED:'收盤／休市'}[QT.st||q.market_status]||v(q.market_status))+'｜最後成功 '+(q.last_success_at?new Date(q.last_success_at).toLocaleString('zh-TW',{hour12:false}):'—')+(q.last_error_at?'｜最後失敗 '+new Date(q.last_error_at).toLocaleString('zh-TW',{hour12:false}):'')+'｜判定依據 '+v(q.calendar_basis)+(fmSrc()?'｜資料來源 FinMind':''):'未啟用'],
     ['近 20 日行情與月營收',hi.enabled?'啟用｜最後更新 '+v(hi.last_success_at):'未啟用'],
-    ['全市場估價',va.enabled?'啟用｜估價基準日 '+v(va.valuation_date):'未啟用（尚無正式估價快照）'],
+    ['全市場估價',va.enabled?'啟用｜估價基準日 '+(VAL.on?v(VAL.date||va.valuation_date):'載入中…'):'未啟用（尚無正式估價快照）'],
     ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google／Bing 新聞（後端每 30 分鐘更新；未開通時顯示「尚未提供」）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
     ['報告',PAGES?'依請求產生（登入帳號後可送出，最多 20 筆；不支援上傳參考資料）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
     ['備份',!bk.enabled?(PAGES?'未提供（後端不做自動備份；匯出方式待確認）':'未設定'):(bk.status==='PASS'?'正常｜最後完成 '+v(bk.completed_at):'🔴 異常｜'+v(bk.error_code))],
@@ -1089,7 +1096,7 @@ function stRender(){
   ];
   $('st-kv').innerHTML=kv.map(function(x){return '<div><div class="k">'+esc(x[0])+'</div><div class="v">'+esc(x[1])+'</div></div>';}).join('');
   var lg=SRV.mode!=='server'?'':(SRV.auth?'已登入　<button class="btn sm" data-logout="1">登出</button>':'未登入（可瀏覽，不能修改）　<button class="btn sm primary" data-login="1">登入</button>');
-  $('st-src').innerHTML=(lg?'<div style="margin-bottom:8px">登入狀態：'+lg+'</div>':'')+(PAGES?'評分與明細：後端 Server API 的批次資料（/data/…，依 manifest 版本）<br>行情：每日收盤與近 20 日、近 5 月營收（/api/market/…），非即時<br>自選群組、新聞／報告設定與個股問題：存在這台瀏覽器；登入後依帳號雲端同步':'首頁與個股資料：/api/v1/home、/api/v1/companies/{代號}（依正式 pointer）<br>行情：FinMind 全市場快照，主機每 30 秒抓取並推送；畫面標示資料來源 FinMind<br>自選群組、新聞與報告設定、個股問題：'+(SRV.mode==='server'?'存在主機':'目前只存在這台瀏覽器'));
+  $('st-src').innerHTML=(lg?'<div style="margin-bottom:8px">登入狀態：'+lg+'</div>':'')+(PAGES?'評分與明細：後端 Server API 的批次資料（/data/…，依 manifest 版本）<br>行情：每日收盤與近 20 日、近 5 月營收（/api/market/…），非即時'+(fmSrc()?'；收盤資料來源：FinMind':'')+'<br>自選群組、新聞／報告設定與個股問題：存在這台瀏覽器；登入後依帳號雲端同步':'首頁與個股資料：/api/v1/home、/api/v1/companies/{代號}（依正式 pointer）<br>行情：FinMind 全市場快照，主機每 30 秒抓取並推送；畫面標示資料來源 FinMind<br>自選群組、新聞與報告設定、個股問題：'+(SRV.mode==='server'?'存在主機':'目前只存在這台瀏覽器'));
 }
 /* ================= router ================= */
 var lastScroll={},curPage='home';
@@ -1178,13 +1185,14 @@ var wasM=isM();window.addEventListener('resize',function(){var m=isM();if(m!==wa
 function basisTxt(){return '分析財報 '+v(H.requested_period)+'｜DAR-L 依 '+v(H.annual_period)+' 年報｜資料計算 '+v(STAT.data_calculation_version)+'｜as-of '+v(H.as_of);}
 $('h-basis').textContent=basisTxt();
 $('h-mfoot').textContent=basisTxt()+'｜試算';
-function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.intra?'行情為盤中快照（約 10 分鐘更新，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
+function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.intra?'行情為盤中快照（約 10 分鐘更新，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+(fmSrc()?'；資料來源：FinMind':'')+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
 bannerRender();
 $('h-upd').textContent='行情：尚未接上';
 if(PAGES){$('w-store').textContent='自選存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';$('ns-store').textContent='設定存在這台瀏覽器；登入帳號後各裝置同步｜來源：Google 新聞（每 30 分鐘更新）';}
 if(SRV.mode==='server'){$('w-store').textContent='自選存在主機，各裝置同步；修改需登入';$('ns-store').textContent='每日擷取一次（前一日 07:30–當日 07:30）；設定存在主機';}
 /* 首頁只在 main() 最後的 route() 畫一次；行情若已先到（SB.quotes）先套用，第一次畫面就有收盤價 */
 if(SB&&SB.quotes&&SB.quotes.ok){qtApply(SB.quotes.data);updLine();bannerRender();}
+if(SB&&SB.val&&SB.val.ok){vaApply(SB.val.data);bannerRender();}
 qtStart();vaStart();
 var _qa=quotesChanged;quotesChanged=function(f){bannerRender();_qa(f);};
 
@@ -1295,14 +1303,16 @@ var _nsRender=nsRender;
 nsRender=function(){
   _nsRender();
   if(!NEWS_ON){$('ns-src').innerHTML='<div class="placeholder">'+esc(NEWS_OFF)+'</div>';return;}
+  if(curPage!=='news-settings'&&!NSRC.loading)NSRC.r=null; /* 每次進設定頁重讀：清單是目前新聞結果中出現過的媒體，會隨瀏覽的新聞增加 */
   nsrcLoad(function(){if(curPage==='news-settings')nsRender();});
   if(!NSRC.r){$('ns-src').innerHTML='<div class="placeholder">來源清單載入中…</div>';return;}
   if(!NSRC.r.ok){$('ns-src').innerHTML='<div class="placeholder">'+esc(newsErr(NSRC.r))+'</div>';return;}
   var all=(NSRC.r.data&&NSRC.r.data.sources)||[],fetched=all.filter(function(s){return s.enabled===true;}),links=all.filter(function(s){return s.enabled!==true;});
+  /* Pages：enabled＝新聞結果中出現過的媒體（依名稱停用）；其餘＝新聞聚合來源（Google／Bing 新聞），只列出、不能停用 */
   $('ns-src').innerHTML=(fetched.length?fetched.map(function(s){var off=(NS.disabled||[]).indexOf(s.source_id)>=0;
-    return '<label class="chk" title="'+esc(s.usage||'')+'"><input type="checkbox" data-nsrc="'+esc(s.source_id)+'"'+(off?'':' checked')+'>'+esc(s.name)+'<span class="sub">（'+esc(LIMIT_ZH[s.content_scope]||s.content_scope||'')+'）</span>'+(PAGES&&safeUrl(s.url)!=='#'?' <a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer" class="sub">網站</a>':'')+'</label>';}).join(''):'<div class="placeholder">目前沒有可自動擷取的來源。</div>')+
-    '<div class="placeholder">取消勾選即停用該來源'+(PAGES?'（只影響這台瀏覽器與帳號的顯示；'+NEWS_SRC+'）':'')+'；擷取白名單由後端維護，這裡不能新增。</div>'+
-    (links.length?'<div style="grid-column:1/-1;margin-top:6px"><span class="sub">外部連結（不自動擷取，只提供網站入口）</span>'+links.map(function(s){return '<div style="font-size:12px;padding:2px 0"><a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer">'+esc(s.name)+'</a><span class="sub">｜'+esc(s.usage||'')+'</span></div>';}).join('')+'</div>':'');
+    return '<label class="chk" title="'+esc(s.usage||'')+'"><input type="checkbox" data-nsrc="'+esc(s.source_id)+'"'+(off?'':' checked')+'>'+esc(s.name)+(PAGES?(s.usage?'<span class="sub">（'+esc(s.usage)+'）</span>':''):'<span class="sub">（'+esc(LIMIT_ZH[s.content_scope]||s.content_scope||'')+'）</span>')+(PAGES&&safeUrl(s.url)!=='#'?' <a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer" class="sub">網站</a>':'')+'</label>';}).join(''):'<div class="placeholder">'+(PAGES?'目前的新聞結果中還沒有媒體來源；瀏覽產業或個股新聞後，出現過的媒體會列在這裡。':'目前沒有可自動擷取的來源。')+'</div>')+
+    '<div class="placeholder">'+(PAGES?'取消勾選即停用該媒體：依媒體名稱過濾，只影響這台瀏覽器與帳號的顯示；清單是目前新聞結果中出現過的媒體（'+NEWS_SRC+'）。':'取消勾選即停用該來源；擷取白名單由後端維護，這裡不能新增。')+'</div>'+
+    (links.length?'<div style="grid-column:1/-1;margin-top:6px"><span class="sub">'+(PAGES?'新聞聚合來源（新聞經由它們取得，不能停用）':'外部連結（不自動擷取，只提供網站入口）')+'</span>'+links.map(function(s){return '<div style="font-size:12px;padding:2px 0">'+(safeUrl(s.url)!=='#'?'<a href="'+esc(safeUrl(s.url))+'" target="_blank" rel="noopener noreferrer">'+esc(s.name)+'</a>':esc(s.name))+'<span class="sub">｜'+esc(s.usage||'')+'</span></div>';}).join('')+'</div>':'');
 };
 document.addEventListener('change',function(e){var t=e.target;if(!t.dataset||!t.dataset.nsrc)return;var id=t.dataset.nsrc;NS.disabled=(NS.disabled||[]).filter(function(x){return x!==id;});if(!t.checked)NS.disabled.push(id);saveNS();});
 var _saveNS3=saveNS;saveNS=function(){NC={};_saveNS3();};
