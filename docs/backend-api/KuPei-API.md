@@ -102,13 +102,13 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 
 ### 行情 `/api/market/*`
 
-`latest`／`history` 是**每日收盤**（非即時），來源是證交所、櫃買中心與公開資訊觀測站的公開資料；盤中快照另見 `/api/market/intraday`。
+`latest`／`history` 是**每日收盤**（非即時）。**日收盤、月營收、交易日曆資料來源：FinMind**（僅在授權範圍內顯示；FinMind 條款要求標示來源，頁面請標「資料來源：FinMind」）；證交所、櫃買中心與公開資訊觀測站只當備援。盤中快照另見 `/api/market/intraday`（不來自 FinMind）。
 
 | 路徑 | 說明 |
 | --- | --- |
-| `GET /api/market/latest` | `{ dates: { L, O }, quotes: { "<代號>": [收盤, 漲跌價差, 成交股數] } }`。`L` 上市、`O` 上櫃，各市場最新交易日。`收盤` 為 `null` ＝當日無成交 |
+| `GET /api/market/latest` | `{ dates: { L, O }, quotes: { "<代號>": [收盤, 漲跌價差, 成交股數] } }`。`L` 上市、`O` 上櫃，各市場最新交易日。`收盤` 為 `null` ＝當日無成交。選填 `source: { L, O }`（K-30，相容新增）：各市場最新交易日的資料來源，`"finmind"` 或 `"exchange"`（證交所／櫃買，含舊資料）；欄位可能不存在，前端要容忍 |
 | `GET /api/market/history?codes=2330,2454` | `{ quotes: { "<代號>": [[日期, 收盤, 成交股數], …] }, revenue: { "<代號>": [[年月, 營收(千元), 年增率%], …] } }`。近 20 個交易日、近 5 個月，舊→新。`codes` 要 1～30 個 4 碼代號，任何一個不合法就整個 400（不會默默丟掉壞的） |
-| `GET /api/market/status` | `{ counts: { quoteDays, firstDay, lastDay, revenueMonths, firstMonth, lastMonth }, runs: [最近 12 次抓取] }`，看資料新不新用 |
+| `GET /api/market/status` | `{ counts: { quoteDays, firstDay, lastDay, revenueMonths, firstMonth, lastMonth }, runs: [最近 12 次抓取], source? }`，看資料新不新用。`runs[].message` 看得出來源：`finmind`、`calendar`（FinMind 日曆確定休市）、`證交所（finmind：原因）`＝FinMind 失敗退回交易所；`source` 同 `latest` |
 
 - 漲跌幅 ＝ `漲跌價差 ÷ (收盤 − 漲跌價差)`。
 - 只有 4 碼代號；評分名單 1,976 家中有 10 家找不到行情（1516、2067、3625、3632、4155、4804、6142、6167、6173、8047）。

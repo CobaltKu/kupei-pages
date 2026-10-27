@@ -20,6 +20,15 @@ const log = []
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS', 'content-type': 'application/json' }
 async function mock(ctx) {
   await ctx.route(/\/(data|api\/market)\//, (route) => route.request().method() === 'OPTIONS' ? route.continue() : route.continue({ headers: { ...route.request().headers(), authorization: 'Bearer ' + ENV.VITE_KUPEI_TOKEN } }))
+  // 報告、新聞、盤中：假的空回應。假的登入權杖打線上會 401，starter 收到 401 會清掉登入（這是正確行為），測試就會被登出
+  await ctx.route(/\/api\/(reports|news|market\/intraday)/, (route) => {
+    const r = route.request(), path = new URL(r.url()).pathname
+    if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
+    const body = path.startsWith('/api/reports') ? (path.endsWith('/requests') ? { requests: [] } : { reports: [] })
+      : path === '/api/news/sources' ? { sources: [] } : path === '/api/news' ? { items: [], fetchedAt: new Date().toISOString(), source: 'google-news-rss' }
+      : { phase: 'CLOSED', stale: false, ttlSeconds: 300, markets: { L: null, O: null }, quotes: {} }
+    return route.fulfill({ status: 200, headers: CORS, body: JSON.stringify(body) })
+  })
   await ctx.route('**/api/auth/**', async (route) => {
     const r = route.request()
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })

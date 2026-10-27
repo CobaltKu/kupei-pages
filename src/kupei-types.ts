@@ -171,6 +171,8 @@ export type Market = 'L' | 'O'
 export interface LatestResponse {
   /** 各市場最新交易日；沒有資料的市場不會出現 */
   dates: Partial<Record<Market, string>>
+  /** 各市場最新交易日的資料來源（選填，K-30）：finmind＝FinMind、exchange＝證交所／櫃買。有 finmind 時頁面要標「資料來源：FinMind」 */
+  source?: Partial<Record<Market, 'finmind' | 'exchange'>>
   /** 代號 → [收盤(null＝當日無成交), 漲跌價差, 成交股數] */
   quotes: Record<string, [number | null, number | null, number | null]>
 }
@@ -227,6 +229,8 @@ export interface MarketStatus {
     lastMonth: string | null
   }
   runs: { job: string; key: string; status: string; rows: number; message: string | null; at: string }[]
+  /** 各市場最新交易日的收盤資料來源（選填，K-30），同 LatestResponse.source */
+  source?: Partial<Record<Market, 'finmind' | 'exchange'>>
 }
 
 export interface ApiErrorBody {

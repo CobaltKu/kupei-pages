@@ -20,9 +20,11 @@ const M = {
   postMode: 'new', // new → 202、dup → 200 同一筆、quota → 403 QUOTA_EXCEEDED
   requests: [],
 }
+// 快照時間用今天（台灣）：stale 且快照不是今天＝休市日，橋接層會退回收盤價（見 e2e_pages_wiring.mjs）
+const TODAY = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10)
 const OPEN = (stale, ttl = 300) => ({
   phase: 'OPEN', stale, ttlSeconds: ttl,
-  markets: { L: { at: '2026-10-27T02:15:00Z', receivedAt: '2026-10-27T02:15:20Z', source: 'twse' }, O: { at: '2026-10-27T02:14:00Z', receivedAt: '2026-10-27T02:14:30Z', source: 'tpex' } },
+  markets: { L: { at: `${TODAY}T10:15:00+08:00`, receivedAt: `${TODAY}T02:15:20Z`, source: 'twse' }, O: { at: `${TODAY}T10:14:00+08:00`, receivedAt: `${TODAY}T02:14:30Z`, source: 'tpex' } },
   quotes: { 2330: [1234.5, 12.5, 12345000, '10:15:00'], 2317: [null, null, null, null] },
 })
 const ITEMS = [
@@ -44,7 +46,7 @@ async function mockApi(route) {
   const json = (status, body) => route.fulfill({ status, headers: CORS, body: JSON.stringify(body) })
   const err = (status, code) => json(status, { error: { code, message: code } })
   if (path === '/api/market/intraday') return json(200, M.intraday)
-  if (path === '/api/news/sources') return json(200, { sources: [{ id: 'gn', name: '經濟日報', url: 'https://money.udn.com/' }, { id: 'x', name: '壞來源' + XSS, url: 'http://bad.example.com/' }] })
+  if (path === '/api/news/sources') return json(200, { sources: [{ id: 'google-news', name: 'Google 新聞', url: 'https://news.google.com/' }, { id: 'x', name: '壞來源' + XSS, url: 'http://bad.example.com/' }] })
   if (path === '/api/news') return json(200, { items: ITEMS, fetchedAt: '2026-10-27T01:30:00Z', source: 'google-news-rss', ...(M.news.stale ? { stale: true } : {}) })
   let m
   if ((m = path.match(/^\/api\/reports\/(\d{4})\/requests$/))) {
@@ -190,10 +192,11 @@ await check('個股新聞：預設「公司名稱,代號」days=5；有設定時
   await noInject(P)
   await shot(P, 'news_stock_card', '#s-news')
 })
-await check('新聞來源：列出 /api/news/sources，名稱跳脫、只有 https 有網站連結', async () => {
+await check('新聞來源：可停用的是新聞中出現的媒體；聚合器（/api/news/sources）只列出、名稱跳脫、只有 https 有連結', async () => {
   await go(P, '#/news-settings', 1500)
-  const t = await P.innerText('#ns-src'); must(t.includes('經濟日報') && t.includes('壞來源<img'), '來源：' + t.slice(0, 120))
-  const hrefs = await P.$$eval('#ns-src a', (x) => x.map((a) => a.getAttribute('href'))); must(hrefs.length === 1 && hrefs[0] === 'https://money.udn.com/', '連結：' + JSON.stringify(hrefs))
+  const t = await P.innerText('#ns-src'); must(t.includes('經濟日報') && t.includes('Google 新聞') && t.includes('壞來源<img'), '來源：' + t.slice(0, 120))
+  const ids = await P.$$eval('#ns-src [data-nsrc]', (x) => x.map((i) => i.dataset.nsrc)); must(ids.length === 2 && ids.includes('經濟日報') && ids.includes('自由時報'), '可停用：' + JSON.stringify(ids))
+  const hrefs = await P.$$eval('#ns-src a', (x) => x.map((a) => a.getAttribute('href'))); must(hrefs.length === 1 && hrefs[0] === 'https://news.google.com/', '連結：' + JSON.stringify(hrefs))
   must(!/尚未提供/.test(await P.innerText('#ns-store')), '設定頁標示仍有「尚未提供」')
   await noInject(P)
   await shot(P, 'news_settings')

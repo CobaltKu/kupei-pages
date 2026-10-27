@@ -88,6 +88,8 @@ for (const [label, opts] of [['desktop', DESKTOP], ['mobile', MOBILE]]) {
     await ctx.addInitScript((ids) => { if (!localStorage.getItem('kupei3_watch')) localStorage.setItem('kupei3_watch', JSON.stringify({ groups: [{ id: 1, name: '自選1', ids }], cur: 1 })) }, WATCH)
     const reqs = []
     ctx.on('request', (r) => reqs.push(r.url()))
+    const miss = [] // 選用檔回 404（manifest 沒交付卻去抓）；r8 起 valuation、help 已交付，有請求是正常的
+    ctx.on('response', (r) => { if (/\/(valuation|help)\.json/.test(r.url()) && r.status() === 404) miss.push(r.url()) })
     const p = await ctx.newPage()
     p.on('pageerror', (e) => errs.push('JS 錯誤：' + e.message))
     p.on('console', (m) => { if (m.type() === 'error' && !/fonts|favicon|Failed to load resource/.test(m.text())) errs.push('console：' + m.text().slice(0, 160)) })
@@ -123,7 +125,7 @@ for (const [label, opts] of [['desktop', DESKTOP], ['mobile', MOBILE]]) {
     r.home = await timed(p, () => p.evaluate(() => (location.hash = '#/home')), full)
     r.homeText = await p.innerText('#pg-home')
     const cnt = (re) => reqs.filter((u) => re.test(u)).length
-    r.req = { latest: cnt(/\/api\/market\/latest/), history: cnt(/\/api\/market\/history/), data: cnt(/\/data\//), missing: cnt(/\/(valuation|help)\.json/), afterWarm: reqs.length - n0 }
+    r.req = { latest: cnt(/\/api\/market\/latest/), history: cnt(/\/api\/market\/history/), data: cnt(/\/data\//), missing: miss.length, optional: cnt(/\/(valuation|help)\.json/), afterWarm: reqs.length - n0 }
     runs[label].push(r)
     console.log(label, i + 1, JSON.stringify({ cold: r.cold, warm: r.warm, sort: [r.sort.first, r.sort.ms], filter: [r.filter.first, r.filter.ms], jump: r.jump.ms, stock: r.stock.ms, watch: r.watch.ms, home: r.home.ms, req: r.req }))
     await ctx.close()
@@ -181,6 +183,7 @@ if (GATE) {
       must(r.req.latest <= 2, 'latest ' + r.req.latest + ' 次（首次＋回訪）')
       must(r.req.history <= 1, 'history ' + r.req.history + ' 次')
       must(r.req.missing === 0, 'valuation／help 404 請求 ' + r.req.missing + ' 次')
+      must(r.req.optional <= 4, 'valuation／help 請求 ' + r.req.optional + ' 次（首次＋回訪各最多 1 次）')
     }
     return ''
   })
