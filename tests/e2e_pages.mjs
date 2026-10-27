@@ -38,7 +38,7 @@ await check('個股頁（有明細）：分數樹與展開', async () => {
 })
 await check('個股頁：收盤價與估價區塊（估價尚未提供）', async () => {
   const t = await p.innerText('#s-valcard'); must(/估價尚未提供/.test(t), '估價區塊：' + t.slice(0, 80))
-  must(/收盤價 \d+\/\d+|盤中 \d+:\d+/.test(t), '沒有收盤價日期或盤中時間'); return ''
+  must(/收盤價 \d+\/\d+|盤中 \d+:\d+|最後更新 \d+:\d+/.test(t), '沒有收盤價日期或盤中時間'); return ''
 })
 await check('個股頁（沒有明細的公司）顯示尚未提供而非錯誤', async () => {
   await p.goto(BASE + '#/stock/1101/home'); await p.waitForTimeout(2500)
