@@ -27,3 +27,9 @@
 .acct-list li .acct-muted { margin-left: 8px; }
 /* 個股頁估價卡：價格格太窄，漲跌幅被省略號吃掉 → 漲跌幅換到價格下一行 */
 .vrow .v .chg { display: block; margin-left: 0; }
+/* 手機（D-11 預檢）：iOS Safari 在輸入框字級小於 16px 時，點進去會自動放大頁面；改成 16px。分數樹的展開按鈕與上下家按鈕加高到 36px 以上 */
+@media (max-width: 720px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea, .chips input { font-size: 16px !important; }
+  .tog, .rdtog { min-height: 36px; align-items: center; }
+  #s-back, #s-prev, #s-next { min-width: 36px; min-height: 36px; }
+}

@@ -13,7 +13,7 @@
 | `tests/` | 瀏覽器測試（見下） |
 | `docs/` | 後端技術回覆與需求；新需求只寫 `docs/後端建議.md` |
 
-UI 不重算任何分數、名次或 Gate；後端沒有的資料（估價、第二階段處置、同業名次、說明定義）顯示「尚未提供」。新聞（`/api/news`，Google／Bing 新聞 RSS）、報告（`/api/reports`，由 KuPei 管線推送）、盤中快照（`/api/market/intraday`，盤中約每 10 分鐘）已接後端（2026-10-27）。
+UI 不重算任何分數、名次或 Gate；後端沒有交付的資料顯示「尚未提供」。正式 r8 批次（`server_v3_0_30_r8_r2_20261027`）已含估價（`valuation.json`）、說明（`help.json`）、`summary.json` 的 `company_meta`（評估狀態、第二階段處置、複核來源）與分數樹節點的 `goal`／`definition`／`peer_*`，橋接層（`src/bridge.ts`）直接轉成畫面欄位，沒有的批次維持空值。新聞（`/api/news`，Google／Bing 新聞 RSS）、報告（`/api/reports`，由 KuPei 管線推送）、盤中快照（`/api/market/intraday`，盤中約每 10 分鐘）已接後端（2026-10-27）。
 
 ## 本機開發
 
@@ -26,6 +26,8 @@ UI 不重算任何分數、名次或 Gate；後端沒有的資料（估價、第
 需要 Node 與 Playwright（Codex 的 Node 工具目錄已內建），Edge 以 `CHR` 指定。先啟動 `npm run dev`（或建置後的 `vite preview`）。
 
 - `tests/e2e_pages.mjs`：對線上 Workers 資料跑完整 UI（首頁、個股、自選、各設定頁、狀態、說明、帳號視窗、手機寬度），18 項。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages.mjs`
+- `tests/e2e_pages_r8.mjs`：正式 r8 擴充欄位（對線上 Workers 資料，不寫入任何資料），10 項：第二階段處置與複核原因、否決／複核來源、未評估公司、同業名次、估價（有中心值、只有中心值、不適用）、109 個節點的目的／定義、首頁 1,979 列的處置分布、說明頁 109 項、狀態頁估價啟用。
+- `tests/e2e_pages_mobile.mjs`：手機預檢（iPhone SE／14／Pro Max 寬度，模擬 iOS Safari），30 項：9 個頁面不橫向捲動、無 JS 錯誤、輸入框字級 ≥16px（避免 iOS 點進去自動放大），帳號視窗不超出畫面。實機 iPhone 仍須人工看。
 - `tests/e2e_pages_account.mjs`：用假的帳號端點測邀請碼欄位（依 `/api/auth/config`）與改密碼，6 項；不建立真實帳號。需 `ENVFILE`（同下）。
 - `tests/e2e_pages_account2.mjs`：用假的帳號與雲端文件端點測「忘記密碼」（登入畫面連結切換、欄位驗證、重設碼錯 401 的訊息、成功後已登入且 `kupei:session` 換新並提示其他裝置已登出）與「匯入舊的寫入權杖資料」（權杖錯、沒有資料可匯入、摘要與確認後寫進帳號雲端、本機換新且 `kupei3_*_prev` 有備份、409 重讀版本重試一次、額度已滿不重試、權杖不進網址與 storage），13 項；不建立真實帳號。需 `ENVFILE`；`SHOTS=<資料夾>` 另存截圖。
 - `tests/e2e_pages_xss.mjs`：在 `localStorage` 預先放入惡意或結構錯誤的 `kupei3_watch`／`kupei3_news`／`kupei3_report`（模擬被改寫的雲端文件）後載入各頁，確認注入的程式沒有執行、不合格的群組與欄位被丟棄、頁面仍正常顯示，8 項；不需登入。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages_xss.mjs`

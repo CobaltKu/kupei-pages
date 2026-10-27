@@ -65,25 +65,56 @@ const homeMemo = new WeakMap<Dataset, Json>()
 const quotesMemo = new WeakMap<LatestResponse, Json>()
 const companyMemo = new WeakMap<Dataset, Map<string, Json>>()
 
-function adaptHome(ds: Dataset): Json {
+/**
+ * summary.json 的 company_meta（評估狀態、第二階段處置、複核來源）：starter 的 loadDataset 只解 rows 不留這個鍵，
+ * 所以這裡用同一個網址（?v=雜湊，一年 immutable）再取一次，瀏覽器快取命中就不另外下載。取不到＝null，畫面退回只用 rows。
+ */
+interface Meta {
+  assessment_status?: string | null
+  phase2_company_action?: string | null
+  phase2_company_action_zh?: string | null
+  phase2_assessment_status?: string | null
+  phase2_review_category?: string | null
+  phase2_review_reasons?: Json[] | null
+  financial_review_sources?: Json[] | null
+  eligibility_veto_features?: string[] | null
+}
+type MetaMap = Record<string, Meta>
+const metaMemo = new WeakMap<Dataset, Promise<MetaMap | null>>()
+function metaOf(ds: Dataset): Promise<MetaMap | null> {
+  let p = metaMemo.get(ds)
+  if (!p) {
+    const v = (ds.manifest as any).hashes?.summary ?? ''
+    p = apiGet<Json>(`/data/${ds.manifest.run}/summary.json?v=${v}`)
+      .then((s) => (s && typeof s.company_meta === 'object' && s.company_meta ? (s.company_meta as MetaMap) : null))
+      .catch(() => null)
+    metaMemo.set(ds, p)
+  }
+  return p
+}
+const arr = <T>(x: unknown): T[] | null => (Array.isArray(x) ? (x as T[]) : null)
+
+function adaptHome(ds: Dataset, meta: MetaMap | null): Json {
   const hit = homeMemo.get(ds)
   if (hit) return hit
-  const out = adaptHomeOnce(ds)
+  const out = adaptHomeOnce(ds, meta)
   homeMemo.set(ds, out)
   return out
 }
 
-function adaptHomeOnce(ds: Dataset): Json {
+function adaptHomeOnce(ds: Dataset, meta: MetaMap | null): Json {
   const h = ds.head
   const rows = ds.companies.map((c) => {
-    const assessed = !c.maj.every((m) => DONE[m.st])
+    const mt = meta?.[c.id]
+    const assessed = mt?.assessment_status ? mt.assessment_status === 'ASSESSED' : !c.maj.every((m) => DONE[m.st])
     return {
       id: c.id, name: c.name, ind: c.ind, market: null,
       assessed, noteNA: assessed ? '' : '尚無足夠已驗收財報',
       fin: c.fin, rank: c.rank, rankCode: null, pc: c.pc,
       maj: c.maj.map((m) => ({ s: m.s, code: '', st: m.st, mr: m.mr, pol: m.pol, per: null })),
-      veto: c.veto, finrev: c.finrev, vetoFeatures: c.vetoFrom, finSources: c.finSrc,
-      p2: null, p2zh: null, p2cat: null, p2status: null,
+      veto: c.veto, finrev: c.finrev, vetoFeatures: mt?.eligibility_veto_features ?? c.vetoFrom, finSources: mt?.financial_review_sources ?? c.finSrc,
+      p2: mt?.phase2_company_action ?? null, p2zh: mt?.phase2_company_action_zh ?? null,
+      p2cat: mt?.phase2_review_category ?? null, p2status: mt?.phase2_assessment_status ?? null,
       period: h.requested_period, annual: h.annual_period,
     }
   })
@@ -106,12 +137,15 @@ function gateNote(ds: Dataset, t: any[]): Json {
   }
 }
 
-function adaptCompany(ds: Dataset, id: string, tree: TreeNode[] | null): Json {
+function adaptCompany(ds: Dataset, id: string, tree: TreeNode[] | null, meta: MetaMap | null): Json {
   const row = ds.byId.get(id)
+  const mt = meta?.[id]
   const out: Json = {
     id, company: {}, assessed: true, noteNA: '',
-    p2: null, p2zh: null, p2cat: null, p2status: null, p2reasons: [],
-    vetoFeatures: row?.vetoFrom ?? [], finSources: row?.finSrc ?? [],
+    p2: mt?.phase2_company_action ?? null, p2zh: mt?.phase2_company_action_zh ?? null,
+    p2cat: mt?.phase2_review_category ?? null, p2status: mt?.phase2_assessment_status ?? null,
+    p2reasons: arr<Json>(mt?.phase2_review_reasons) ?? [],
+    vetoFeatures: mt?.eligibility_veto_features ?? row?.vetoFrom ?? [], finSources: mt?.financial_review_sources ?? row?.finSrc ?? [],
     majors: {}, tree: null, notesBy: {}, readyBy: {}, zhName: {}, parentOf: {},
   }
   if (!tree || !tree.length) return out
@@ -121,10 +155,16 @@ function adaptCompany(ds: Dataset, id: string, tree: TreeNode[] | null): Json {
     if (n.src?.length) out.notesBy[n.id] = n.src.map((t) => gateNote(ds, t as any[]))
     if (n.rd?.length) out.readyBy[n.id] = n.rd.map((t) => gateNote(ds, t as any[]))
     if (lv === 1) out.majors[n.id] = { feature_id: n.id, market_rank: n.mr ?? null, inherited_triggered_count: n.below || 0 }
+    // goal、definition、display_code、diagnostic_zero_weight、peer_*：批次的選用欄位（DATA-01），沒有就維持空值
+    const peerStatus = typeof n.peer_rank_status === 'string' ? n.peer_rank_status : null
     return {
-      id: n.id, en: n.en, zh: n.zh, goal: null, def: null, lv, w: n.w, p: n.p, st: n.st,
-      s: n.s == null ? null : +n.s, code: '', stx: '', r: n.r || [], diag0: false,
-      peer: { group: null, rank: null, pop: null, status: null, has: false }, pn: [],
+      id: n.id, en: n.en, zh: n.zh, goal: typeof n.goal === 'string' ? n.goal : null, def: typeof n.definition === 'string' ? n.definition : null,
+      lv, w: n.w, p: n.p, st: n.st,
+      s: n.s == null ? null : +n.s, code: typeof n.display_code === 'string' ? n.display_code : '', stx: '', r: n.r || [], diag0: n.diagnostic_zero_weight === true,
+      peer: {
+        group: typeof n.peer_group === 'string' ? n.peer_group : null, rank: num(n.peer_rank), pop: num(n.peer_rank_population),
+        status: peerStatus, has: peerStatus != null,
+      }, pn: [],
       c: (n.c || []).map((x) => conv(x, lv + 1, n.id)),
     }
   }
@@ -132,7 +172,7 @@ function adaptCompany(ds: Dataset, id: string, tree: TreeNode[] | null): Json {
   return out
 }
 
-function adaptStatus(ds: Dataset, latest: LatestResponse | null): Json {
+function adaptStatus(ds: Dataset, latest: LatestResponse | null, val: Json | null): Json {
   const g = ds.head.gate_overlay
   const d = latest?.dates
   const day = d ? [d.L, d.O].filter(Boolean).sort().pop() : null
@@ -143,7 +183,7 @@ function adaptStatus(ds: Dataset, latest: LatestResponse | null): Json {
     manifest_sha256: null,
     quotes: { enabled: !!latest, market_status: 'CLOSED', last_success_at: day ? `${day}T13:30:00+08:00` : null, calendar_basis: '每日收盤（非即時）' },
     history: { enabled: true, last_success_at: day ? `${day}T13:30:00+08:00` : null },
-    valuation: { enabled: false },
+    valuation: val ? { enabled: true, valuation_date: typeof val.valuation_date === 'string' ? val.valuation_date : null } : { enabled: false },
     news: { enabled: false }, reports: { enabled: false }, backup: { enabled: false },
     ui_note_translations_version: ds.manifest.status_notes?.translations ?? null,
     batch: ds.manifest.run, published_at: ds.manifest.published_at,
@@ -678,12 +718,14 @@ async function req(method: string, path: string, body?: unknown, headers?: Recor
 const api = {
   base: BASE,
   req,
-  home: async () => adaptHome(await loadDs()),
+  home: async () => { const ds = await loadDs(); return adaptHome(ds, await metaOf(ds)) },
   status: async () => {
     const ds = await loadDs()
     let latest: LatestResponse | null = null
     try { latest = await client.marketLatest() } catch { /* 行情是加值 */ }
-    return adaptStatus(ds, latest)
+    let val: Json | null = null
+    try { val = (await client.loadValuation()) as Json | null } catch { /* 估價是選用檔 */ }
+    return adaptStatus(ds, latest, val)
   },
   notes: async () => {
     const ds = await loadDs()
@@ -699,7 +741,7 @@ const api = {
     if (hit) return hit
     let tree: TreeNode[] | null = null
     try { tree = await client.loadDetail(id) } catch (e) { if (!(e instanceof KupeiError && e.status === 404)) throw e }
-    const out = adaptCompany(ds, id, tree)
+    const out = adaptCompany(ds, id, tree, await metaOf(ds))
     memo.set(id, out)
     return out
   },

@@ -36,13 +36,14 @@ await check('個股頁（有明細）：分數樹與展開', async () => {
   await p.click('#s-tree tr.lv1 .tog'); await p.waitForTimeout(400)
   const n = await p.$$eval('#s-tree tr', x => x.length); must(n > 12, '展開後列數 ' + n); return n + ' 列'
 })
-await check('個股頁：收盤價與估價區塊（估價尚未提供）', async () => {
-  const t = await p.innerText('#s-valcard'); must(/估價尚未提供/.test(t), '估價區塊：' + t.slice(0, 80))
-  must(/收盤價 \d+\/\d+|盤中 \d+:\d+|最後更新 \d+:\d+/.test(t), '沒有收盤價日期或盤中時間'); return ''
+await check('個股頁：收盤價與正式估價區塊（V3.0.30 r3）', async () => {
+  await p.goto(BASE + '#/stock/2330/home'); await p.waitForFunction(() => /中心\s*[\d,.]+/.test(document.querySelector('#s-valcard')?.innerText || ''), null, { timeout: 30000 })
+  const t = await p.innerText('#s-valcard'); must(!/估價尚未提供/.test(t), '仍顯示估價尚未提供')
+  must(/收盤價 \d+\/\d+/.test(t) && /估價基準日 \d+\/\d+/.test(t), '沒有收盤價或估價基準日'); return ''
 })
-await check('個股頁（沒有明細的公司）顯示尚未提供而非錯誤', async () => {
-  await p.goto(BASE + '#/stock/1101/home'); await p.waitForTimeout(2500)
-  const t = await p.innerText('#s-tree'); must(/尚未提供/.test(t) && !/載入失敗/.test(t), t.slice(0, 120)); return ''
+await check('個股頁（任一公司）有明細，不再顯示尚未提供', async () => {
+  await p.goto(BASE + '#/stock/1101/home'); await p.waitForFunction(() => document.querySelectorAll('#s-tree tr').length >= 12, null, { timeout: 30000 })
+  const t = await p.innerText('#s-tree'); must(!/尚未提供|載入失敗/.test(t), t.slice(0, 120)); return ''
 })
 await check('個股頁沒有 undefined／NaN', async () => { const t = await p.innerText('#pg-stock'); must(!/undefined|NaN/.test(t), '畫面含 undefined／NaN'); return '' })
 await check('自選：加入、重新整理後仍在（本機）', async () => {
