@@ -112,7 +112,7 @@ await check('盤中 CLOSED：維持「收盤價 M/D・非即時」與收盤價',
   must(calls(/intraday/).length >= 1, '沒有讀盤中端點')
   await p.context().close(); return lbl
 })
-await check('盤中 OPEN：價格覆蓋收盤、標示「盤中 HH:MM（約 5 分鐘更新）」、沒成交顯示「—」', async () => {
+await check('盤中 OPEN：價格覆蓋收盤、標示「盤中 HH:MM（約 N 分鐘更新，N 依 ttlSeconds）」、沒成交顯示「—」', async () => {
   M.intraday = OPEN(false)
   const p = await open('#/stock/2330/home'); await p.waitForTimeout(1500)
   const lbl = await p.innerText('#h-upd'); must(lbl.includes('盤中 10:15（約 5 分鐘更新）'), '標示：' + lbl)
@@ -163,7 +163,7 @@ await check('產業新聞：關鍵字與排除字來自本機設定、days=span�
   const links = await P.$$eval('#n-main a[target=_blank]', (x) => x.map((a) => a.getAttribute('href')))
   must(links.length === 1 && links[0] === 'https://news.example.com/a', '連結：' + JSON.stringify(links))
   must(main.includes('非 https 的新聞') && main.includes('javascript 連結'), '非 https 的新聞仍要列出標題')
-  const bn = await P.innerText('#n-banner2'); must(/Google 新聞（每 30 分鐘更新）/.test(bn) && !/尚未提供/.test(bn), '標示：' + bn)
+  const bn = await P.innerText('#n-banner2'); must(/Google／Bing 新聞（每 30 分鐘更新）/.test(bn) && !/尚未提供/.test(bn), '標示：' + bn)
   must(!/尚未提供/.test(await P.innerText('#pg-news')), '新聞頁還有「尚未提供」')
   await shot(P, 'news_industry')
   return links.length + ' 個 https 連結'

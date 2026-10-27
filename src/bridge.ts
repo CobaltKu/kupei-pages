@@ -2,7 +2,7 @@
  * KuPei Pages 前端橋接層（2026-10-26）。
  * 完整 UI（public/legacy/app.js，來自 Python/kupei_3/ui_web）原本讀私人 API /api/v1；Pages 版改讀後端 Server API：
  *   評分與明細  /data/<run>/…（summary、details、tr、vparams，選用 valuation、help）
- *   行情        /api/market/latest、/api/market/history（每日收盤）；/api/market/intraday（盤中快照，約 5 分鐘更新）
+ *   行情        /api/market/latest、/api/market/history（每日收盤）；/api/market/intraday（盤中快照，約 10 分鐘更新）
  *   新聞        /api/news、/api/news/sources（Google 新聞 RSS，關鍵字來自本機新聞設定）
  *   報告        /api/reports/<代號>…（列表、單篇、產生請求；請求只限登入帳號）
  *   帳號與同步  /api/auth/*、/api/store/<key>（依帳號分開的雲端文件）

@@ -43,10 +43,11 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
    - 403 `FORBIDDEN`：這個權杖不能用這個路徑（唯讀權杖打 `/api/store`、任何權杖打站長的 `/api/watchlist` 等），不要想辦法繞過。403 `QUOTA_EXCEEDED`：雲端文件額度滿了，提示使用者，不要自動重試。
    - 瀏覽器出現 CORS 錯誤：本機要是 `http://localhost:<埠>` 或 `http://127.0.0.1:<埠>`；GitHub Pages 要先把 `https://<帳號>.github.io` 給維護者加白名單。不要改用 `no-cors` 之類的方式硬解。
 7. **正式部署只到雙方約定的 GitHub Pages**（流程見《KuPei-前端部署指南-GitHub-Pages.md》），權杖用 GitHub Actions secret `VITE_KUPEI_TOKEN` 在建置時注入；不要把權杖貼進 issue、commit 訊息或對話。
-8. 目前沒有盤中即時價、新聞、個股報告，不要為它們做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
+8. 目前沒有即時串流：盤中價只有定時快照（`/api/market/intraday`，`stale` 為 `true` 時不要當成即時價），新聞與報告見第 12 條；不要為沒有的資料做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
 9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.register()`／`kupei.auth.login()`（註冊畫面先呼叫 `kupei.auth.config()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。沒登入時 App 退回本機模式（只存 localStorage、顯示「未登入，只存在這台裝置」），不要報錯；評分與行情不需要登入。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
+12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存檔案，不要做上傳。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period)`，進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。報告是外部管線產生的，後端不會自己產生。
 
 ## 端點
 
@@ -101,7 +102,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 
 ### 行情 `/api/market/*`
 
-只有**每日收盤**（非即時），來源是證交所、櫃買中心與公開資訊觀測站的公開資料。
+`latest`／`history` 是**每日收盤**（非即時），來源是證交所、櫃買中心與公開資訊觀測站的公開資料；盤中快照另見 `/api/market/intraday`。
 
 | 路徑 | 說明 |
 | --- | --- |
@@ -111,7 +112,24 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 
 - 漲跌幅 ＝ `漲跌價差 ÷ (收盤 − 漲跌價差)`。
 - 只有 4 碼代號；評分名單 1,976 家中有 10 家找不到行情（1516、2067、3625、3632、4155、4804、6142、6167、6173、8047）。
-- 盤中即時價、新聞、個股報告**還沒有**。估價不在行情這裡，是評分批次的可選檔 `valuation.json`（見上）。
+- 盤中價見下一節（每 10 分鐘一份快照，不是即時串流）；新聞、個股報告**還沒有**。估價不在行情這裡，是評分批次的可選檔 `valuation.json`（見上）。
+
+### 盤中行情 `/api/market/intraday`（2026-10-27 新增）
+
+外部排程**盤中每 10 分鐘**抓證交所 MIS 即時報價推進來，這裡讀最新的那一份快照。**不是即時串流**：不要輪詢，畫面打開或使用者手動重新整理時讀一次即可（`starter` 的 `kupei.marketIntraday()` 已包好 60 秒記憶體快取）。
+
+| 路徑 | 說明 |
+| --- | --- |
+| `GET /api/market/intraday` | `{ phase, stale, ttlSeconds, markets: { L, O }, quotes: { "<代號>": [成交價, 漲跌, 累計成交量(股), "HH:MM:SS"] } }`，上市、上櫃合併。唯讀權杖、登入權杖、寫入權杖都可讀 |
+| `POST /api/market/intraday/ingest` | **推送權杖專用，前端不會用到**（排程程式推資料用；唯讀、登入、寫入權杖一律 401） |
+
+- `phase`：台灣時間平日 09:00 前 `PRE`、09:00～13:30 `OPEN`、其餘（含週末）`CLOSED`。國定休市日後端不知道，看 `stale`。
+- `stale`：`true` ＝ 這份不是今天夠新的資料——任一市場還沒有快照、快照日期不是今天（休市日、週末、開盤前），或開盤中超過 20 分鐘沒更新。**`stale` 為 `true` 時請改顯示收盤價（`/api/market/latest`）或標明資料時間**，不要當成即時價。
+- `markets.L`／`markets.O`：`{ at, receivedAt, source }` 或 `null`（還沒有快照）。`at` 是來源資料時間（ISO 8601、`+08:00`），顯示「資料時間」用它；`receivedAt` 是後端收到的時間（UTC）。
+- 報價每格都可能是 `null`：成交價 `null` ＝今天還沒有成交；漲跌 ＝ 成交價 − 昨收；成交量單位是**股**（與 `latest` 相同，不含零股）。漲跌幅 ＝ `漲跌 ÷ (成交價 − 漲跌)`。
+- 沒有快照時回 `quotes: {}`、`stale: true`。只有 4 碼代號。
+- `ttlSeconds`（目前 300）是推送間隔；伺服器快取 60 秒、`Cache-Control: private, max-age=60`。GitHub 排程常會晚幾分鐘，資料時間可能比現在早 5～15 分鐘。
+- 計入 `/api/*` 的每分鐘 30 次。
 
 ### 帳號 `/api/auth/*`（不需要權杖）
 
@@ -169,6 +187,32 @@ await kupei.auth.logout()
 
 **寫入權杖怎麼用**（站長本人用；一般使用者請用帳號）：它不是建置時注入的環境變數——那樣會跟網頁一起公開。做法是 App 提供一個設定畫面讓使用者貼上，`kupei.setWriteToken(token)` 會存在該裝置的 `localStorage`（key `kupei:write-token`），之後所有請求自動改用它。清除就 `setWriteToken(null)`。
 
+### 新聞與報告 `/api/news`、`/api/reports/*`（2026-10-27）
+
+唯讀、寫入、登入權杖都能讀新聞與報告；送出「產生報告」請求只限**登入權杖**（唯讀、寫入權杖 403 `FORBIDDEN`）。計入每分鐘 30 次（同 `/api/market/*`）。
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `GET` | `/api/news?q=台積電,2330&exclude=廣告&days=3` | `{ items: [{ title, url, source, publishedAt }], fetchedAt, source: "google-news-rss", stale? }`。`q` 1～5 個關鍵字（之間是 OR）、`exclude` 0～5 個排除字（**只比對標題**）、每個 1～50 字，逗號分隔；`days` 1、3 或 5（省略＝3）。不合法 400。新→舊、最多 50 則、只有 `days` 天內的；`url` 一定是 https（Google 新聞的轉址連結，打開會到原文）；`title` 已去掉結尾的「 - 來源」。伺服器同一個查詢 30 分鐘內只抓一次，瀏覽器可留 5 分鐘（`private, max-age=300`）。來源暫時抓不到時回較舊的結果並帶 `"stale": true`，完全沒有舊結果時 **502** `UPSTREAM_ERROR` |
+| `GET` | `/api/news/sources` | `{ sources: [{ id: "google-news", … }, { id: "bing-news", name: "Bing 新聞", … }] }`。後端先抓 Google 新聞，失敗（Google 會擋 Cloudflare 機房 IP）改抓 Bing 新聞；`source` 欄位目前固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
+| `GET` | `/api/reports/<code>` | `{ reports: [{ period, rev, status, title, generatedAt, url, files }] }`（不含 `summary`）。`code` 4 碼數字。`period` 新→舊、同期 `rev` 新→舊；`status` 是 `DRAFT`／`PUBLISHED`／`FAILED`；`url` 是 https 或 `null`；`files` 是 `[{ name, url }]`（外部 https 連結，後端不存檔案） |
+| `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
+| `POST` | `/api/reports/<code>/requests` | **登入權杖**。本文 `{ "period": "2026Q2", "trigger": "MANUAL" }` → **202** `{ id, status: "QUEUED", createdAt }`。同一期已經在排隊就回那一筆（**200**，同樣形狀）。每個帳號最多 20 筆排隊中，超過 **403** `QUOTA_EXCEEDED`（`details: { queued, maxQueued }`） |
+| `GET` | `/api/reports/<code>/requests` | **登入權杖**。`{ requests: [{ id, period, trigger, status, createdAt, updatedAt, message }] }`，只有自己的，新→舊。`status`：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，`message` 是管線留的說明（可能 `null`） |
+
+> 新聞每個查詢快取 30 分鐘。**沒命中快取的新查詢每個 IP 每分鐘最多 6 次**：超過時有舊結果就回舊的並帶 `stale: true`，沒有就回 429 `RATE_LIMITED`。不要一次打很多組關鍵字，也不要把使用者輸入的每個字元都拿去查。
+
+**推送權杖專用**（給產生報告的管線，不是給瀏覽器用；`Authorization: Bearer <INGEST_TOKEN>`，同行情推送的那把，**不要放進前端**）：
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }` |
+| `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404 |
+| `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50 |
+| `PATCH` | `/api/reports/requests/<id>` | 本文 `{ status: "RUNNING"\|"DONE"\|"FAILED", message?: ≤500 字 }` → `{ status: "ok" }`；沒有這筆 404 |
+
+推送權杖錯或沒帶 → 401（不帶 CORS）。用唯讀、寫入、登入權杖打這四個也是 401。
+
 ### 健康檢查
 
 `GET /api/health` → `{ "ok": true }`。不需要權杖，確認服務在不在線。
@@ -185,10 +229,11 @@ await kupei.auth.logout()
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
 | 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
-| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }` |
+| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }` |
 | 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過 300 KB |
 | 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼 10 次（登入另外每個帳號 10 次）。IPv6 以 /64 為一組，超過會帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
-| 404 | `NOT_FOUND` | 刪除不存在的文件（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
+| 502 | `UPSTREAM_ERROR` | `/api/news` 的新聞來源暫時抓不到、伺服器也沒有舊結果；稍後再試（不要立刻重送） |
+| 404 | `NOT_FOUND` | 刪除不存在的文件、沒有這份報告（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 
 > 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`）、`/api/*` 請求沒帶 `Authorization`、送了不允許的請求標頭（預檢只允許 `Authorization`、`Content-Type`、`If-None-Match`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。回應沒有 `Access-Control-Expose-Headers`，所以跨來源的 JS 讀不到 `Retry-After`、`ETag` 等非基本標頭（瀏覽器自己的快取驗證不受影響）。
 
@@ -300,6 +345,22 @@ type GateNote = [string, string, string, string, string, string, string, number,
 type HelpDoc = unknown                                   // /data/<run>/help.json
 type Valuation = Record<string, unknown>                 // /data/<run>/valuation.json
 type NodeInfo = Record<string, Record<string, unknown>>  // /data/<run>/node_info.json：節點 id → 定義物件
+
+// GET /api/news
+interface NewsItem { title: string; url: string; source: string; publishedAt: string }
+interface NewsResponse { items: NewsItem[]; fetchedAt: string; source: 'google-news-rss'; stale?: true }
+// GET /api/news/sources
+interface NewsSource { id: string; name: string; url: string }
+
+// GET /api/reports/<code>（不含 summary）、GET /api/reports/<code>/<period>/<rev>（含 summary）
+type ReportStatus = 'DRAFT' | 'PUBLISHED' | 'FAILED'
+interface ReportFile { name: string; url: string }
+interface ReportMeta { period: string; rev: number; status: ReportStatus; title: string; generatedAt: string; url: string | null; files: ReportFile[] }
+interface Report extends ReportMeta { summary: string | null }
+// POST／GET /api/reports/<code>/requests（登入權杖）
+type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
+interface ReportRequestCreated { id: number; status: 'QUEUED'; createdAt: string }
+interface ReportRequest { id: number; period: string; trigger: 'MANUAL'; status: ReportRequestStatus; createdAt: string; updatedAt: string; message: string | null }
 ```
 
 ## 附錄 B：排序與底色規則（與本站畫面一致）

@@ -38,7 +38,7 @@ await check('個股頁（有明細）：分數樹與展開', async () => {
 })
 await check('個股頁：收盤價與估價區塊（估價尚未提供）', async () => {
   const t = await p.innerText('#s-valcard'); must(/估價尚未提供/.test(t), '估價區塊：' + t.slice(0, 80))
-  must(/收盤價 \d+\/\d+/.test(t), '沒有收盤價日期'); return ''
+  must(/收盤價 \d+\/\d+|盤中 \d+:\d+/.test(t), '沒有收盤價日期或盤中時間'); return ''
 })
 await check('個股頁（沒有明細的公司）顯示尚未提供而非錯誤', async () => {
   await p.goto(BASE + '#/stock/1101/home'); await p.waitForTimeout(2500)
@@ -66,8 +66,8 @@ await check('狀態頁：版本、行情、儲存位置', async () => {
   await p.goto(BASE + '#/status'); await p.waitForTimeout(1200)
   const t = await p.innerText('#pg-status'); must(/V0\.0\.|V3\.0\./.test(t) && /每日收盤/.test(t) && /這台瀏覽器/.test(t), t.slice(0, 200)); return ''
 })
-await check('新聞頁顯示尚未提供', async () => {
-  await p.goto(BASE + '#/news'); await p.waitForTimeout(1000); must(/尚未提供/.test(await p.innerText('#pg-news')), '新聞頁沒有「尚未提供」'); return ''
+await check('新聞頁接上後端（不再顯示後端未承接）', async () => {
+  await p.goto(BASE + '#/news'); await p.waitForTimeout(1500); const t = await p.innerText('#pg-news'); must(!/後端未承接|新聞擷取功能尚未提供/.test(t) && !/undefined|NaN/.test(t), t.slice(0, 120)); return ''
 })
 await check('帳號視窗：開啟、切換註冊、錯誤帳號被拒（不建立帳號）', async () => {
   await p.goto(BASE); await p.waitForTimeout(1500); await p.click('[data-acct]'); await p.waitForSelector('#acct-user')

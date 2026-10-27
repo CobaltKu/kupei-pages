@@ -309,7 +309,7 @@ function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_succe
 function pxLabel(){return PAGES&&QT.intra?'盤中價':PXL;}
 function qtMerge(ev){QT.v++;var q=ev.quotes||{};Object.keys(q).forEach(function(k){QT.map[k]=q[k];});QT.seq=Math.max(QT.seq,ev.seq||0);QT.last=new Date().toISOString();}
 function qtRefresh(){KupeiAPI.req('GET','/quotes').then(function(r){if(r.ok&&!qtSame(r.data)){qtApply(r.data);quotesChanged();}else qtSchedule();},function(){qtSchedule();});}
-/* Pages 盤中（2026-10-27）：後端每 ttlSeconds（約 5 分鐘）更新一次盤中快照，所以只有盤中（phase=OPEN）且分頁可見時，
+/* Pages 盤中（2026-10-27）：後端每 ttlSeconds（約 10 分鐘）更新一次盤中快照，所以只有盤中（phase=OPEN）且分頁可見時，
    每 ttl 秒重抓一次 /api/market/intraday。這是跟著後端快照的更新頻率走（經確認可接受），不是輪詢即時報價；
    分頁在背景時不抓，回到分頁由 visibilitychange 補抓；盤前、收盤後不排程，只在載入與回到分頁時讀一次（串接規範 §2.5）。 */
 function qtSchedule(){if(QT.it){clearTimeout(QT.it);QT.it=null;}if(!PAGES||!QT.intra)return;QT.it=setTimeout(function(){QT.it=null;if(document.visibilityState==='visible')qtRefresh();},(QT.intra.ttl||300)*1000);}
@@ -744,7 +744,7 @@ function wRender(){
   if(!g||!g.ids.length)b='<tr><td colspan="30" style="text-align:left;color:var(--faint);padding:16px">此群組還沒有公司。到首頁點「＋」加入。</td></tr>';
   $('w-body').innerHTML=b;
   importBanner();
-  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');$('w-legend3').textContent=miss.length?miss.join('、')+'尚未提供':(PAGES?(QT.intra?'盤中為約 5 分鐘更新的快照（非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):'成交價來源 FinMind；安全邊際依即時股價計算');
+  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');$('w-legend3').textContent=miss.length?miss.join('、')+'尚未提供':(PAGES?(QT.intra?'盤中為約 10 分鐘更新的快照（非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):'成交價來源 FinMind；安全邊際依即時股價計算');
   if(isM()){
     var ids=g?g.ids:[];
     $('w-mlist').innerHTML=ids.length?ids.map(function(id,ix){
@@ -1080,7 +1080,7 @@ function stRender(){
     ['行情',q.enabled?({OPEN:'交易中',DELAYED:'延遲',CLOSED:'收盤／休市'}[QT.st||q.market_status]||v(q.market_status))+'｜最後成功 '+(q.last_success_at?new Date(q.last_success_at).toLocaleString('zh-TW',{hour12:false}):'—')+(q.last_error_at?'｜最後失敗 '+new Date(q.last_error_at).toLocaleString('zh-TW',{hour12:false}):'')+'｜判定依據 '+v(q.calendar_basis):'未啟用'],
     ['近 20 日行情與月營收',hi.enabled?'啟用｜最後更新 '+v(hi.last_success_at):'未啟用'],
     ['全市場估價',va.enabled?'啟用｜估價基準日 '+v(va.valuation_date):'未啟用（尚無正式估價快照）'],
-    ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google 新聞（後端每 30 分鐘更新；未開通時顯示「尚未提供」）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
+    ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google／Bing 新聞（後端每 30 分鐘更新；未開通時顯示「尚未提供」）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
     ['報告',PAGES?'依請求產生（登入帳號後可送出，最多 20 筆；不支援上傳參考資料）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
     ['備份',!bk.enabled?(PAGES?'未提供（後端不做自動備份；匯出方式待確認）':'未設定'):(bk.status==='PASS'?'正常｜最後完成 '+v(bk.completed_at):'🔴 異常｜'+v(bk.error_code))],
     ['資料儲存',PAGES?(window.KupeiAuth&&window.KupeiAuth.session()?'這台瀏覽器；已登入 '+window.KupeiAuth.session().username+'，自選與設定依帳號雲端同步':'這台瀏覽器（未登入；登入後自選與設定可跨裝置同步）'):(SRV.mode==='server'?'主機（跨裝置同步）':'這台瀏覽器（主機寫入服務未啟用）')]
@@ -1176,7 +1176,7 @@ var wasM=isM();window.addEventListener('resize',function(){var m=isM();if(m!==wa
 function basisTxt(){return '分析財報 '+v(H.requested_period)+'｜DAR-L 依 '+v(H.annual_period)+' 年報｜資料計算 '+v(STAT.data_calculation_version)+'｜as-of '+v(H.as_of);}
 $('h-basis').textContent=basisTxt();
 $('h-mfoot').textContent=basisTxt()+'｜試算';
-function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.intra?'行情為盤中快照（約 5 分鐘更新，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
+function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.intra?'行情為盤中快照（約 10 分鐘更新，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
 bannerRender();
 $('h-upd').textContent='行情：尚未接上';
 if(PAGES){$('w-store').textContent='自選存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';$('ns-store').textContent='設定存在這台瀏覽器；登入帳號後各裝置同步｜來源：Google 新聞（每 30 分鐘更新）';}
@@ -1192,7 +1192,7 @@ var _qa=quotesChanged;quotesChanged=function(f){bannerRender();_qa(f);};
 /* Pages（2026-10-27）：新聞走後端 /api/news（Google 新聞 RSS），報告走 /api/reports；後端未開通時各區塊顯示「尚未提供」（見 newsErr／repErr 的 NOT_PROVIDED） */
 var NEWS_ON=PAGES||SRV.mode==='server'&&!!(STAT.news&&STAT.news.enabled);
 var REP_ON=PAGES||SRV.mode==='server'&&!!(STAT.reports&&STAT.reports.enabled);
-var NEWS_SRC='來源：Google 新聞（每 30 分鐘更新）';
+var NEWS_SRC='來源：Google／Bing 新聞（每 30 分鐘更新）';
 NEWS_OFF=PAGES?OFFZH:(SRV.mode!=='server'?'新聞需連上主機才能顯示（目前為本機模式）。':'新聞服務尚未啟用。');
 var LIMIT_ZH={RSS_METADATA_ONLY:'僅 RSS 標題與摘要',BODY_UNAVAILABLE:'未取得新聞全文',SOURCE_DISABLED_BY_USER:'來源已停用',TITLE_ONLY:'僅標題與連結',STALE:'暫時無法更新，顯示上次擷取結果'};
 var REQ_ZH={SUBMITTED:'已送出（等待人工／AI 初稿）',DRAFTING:'初稿中',REVIEWING:'審核中',RECHECKING:'覆核中',PUBLISHED:'已發布',FAILED:'失敗',CANCELLED:'已取消',QUEUED:'排隊中',RUNNING:'產生中',DONE:'已完成'};
