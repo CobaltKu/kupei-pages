@@ -134,7 +134,7 @@ function reloadW(done){KupeiAPI.req('GET','/watchlist').then(function(r){if(r.ok
 /* 寫入：未登入先登入；版本衝突重新載入；連線中斷先重新查詢，不自動重送（J1） */
 function srvWrite(method,path,body,opt,onOk){
   opt=opt||{};
-  if(!SRV.auth){showLogin(function(){srvWrite(method,path,body,opt,onOk);});return;}
+  if(!SRV.auth&&!opt.local){showLogin(function(){srvWrite(method,path,body,opt,onOk);});return;}
   var h={};if(opt.ver!=null)h['If-Match']=String(opt.ver);if(opt.idem)h['Idempotency-Key']=opt.idem;
   KupeiAPI.req(method,path,body,h).then(function(r){
     if(r.status===401){SRV.auth=false;showLogin(function(){srvWrite(method,path,body,opt,onOk);});return;}
@@ -395,9 +395,10 @@ document.addEventListener('mousemove',function(e){
 /* ================= 個股問題（K7；E7、E7a、E7b） ================= */
 var QSTZ={NEW:'新增',STILL_VALID:'仍成立',RESOLVED:'已解除',UNDETERMINED:'無法判斷'};
 var QS={id:null,ver:0,list:null,showDel:false,form:false,loading:false,err:null};
+function QSTORE(){var s=window.KupeiAuth&&window.KupeiAuth.session&&window.KupeiAuth.session();return s?'個股問題存在這台瀏覽器；已登入 '+s.username+'，各裝置同步':'個股問題存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';}
 function qLoad(id){
   QS.id=id;QS.list=null;QS.err=null;QS.form=false;QS.showDel=false;
-  if(SRV.mode!=='server'){qRender();return;}
+  if(SRV.mode!=='server'&&!PAGES){qRender();return;}
   QS.loading=true;qRender();
   KupeiAPI.req('GET','/companies/'+encodeURIComponent(id)+'/questions?include_deleted=true').then(function(r){
     QS.loading=false;if(QS.id!==id)return;
@@ -406,7 +407,7 @@ function qLoad(id){
 }
 function qApply(res){QS.ver=res.version;QS.list=res.questions||[];qRender();}
 function qWrite(method,path,body,idem,okMsg){
-  srvWrite(method,'/companies/'+encodeURIComponent(QS.id)+'/questions'+path,body,{ver:QS.ver,idem:idem,onConflict:function(){qLoad(QS.id);}},function(res){
+  srvWrite(method,'/companies/'+encodeURIComponent(QS.id)+'/questions'+path,body,{ver:QS.ver,idem:idem,local:PAGES,onConflict:function(){qLoad(QS.id);}},function(res){
     if(res&&res.questions)qApply(res);else qLoad(QS.id);if(okMsg)toast(okMsg);});
 }
 function qRow(q){
@@ -418,17 +419,18 @@ function qRow(q){
   return '<div class="q"><span class="qb qb-'+esc(st)+'">'+esc(st)+man+'</span><div><div class="qid">'+meta+'</div><div>'+esc(q.body)+ev+'</div></div><div class="qa">'+act+'</div></div>';
 }
 function qRender(){
-  if(SRV.mode!=='server'){$('s-qtag').textContent='尚未開放';$('q-showdel').hidden=true;$('q-body').innerHTML='<div class="placeholder">'+(PAGES?OFFZH:'個股問題存在主機；主機寫入服務未啟用時無法使用。')+'</div>';return;}
+  if(SRV.mode!=='server'&&!PAGES){$('s-qtag').textContent='尚未開放';$('q-showdel').hidden=true;$('q-body').innerHTML='<div class="placeholder">'+(PAGES?OFFZH:'個股問題存在主機；主機寫入服務未啟用時無法使用。')+'</div>';return;}
   $('s-qtag').textContent='';
   if(QS.loading){$('q-body').innerHTML='<div class="placeholder">載入中…</div>';return;}
   if(QS.err){$('q-body').innerHTML='<div class="placeholder">個股問題載入失敗：'+esc(QS.err)+'</div>';return;}
   var L=QS.list||[],act=L.filter(function(q){return !q.deleted;}),del=L.filter(function(q){return q.deleted;});
   $('q-showdel').hidden=!del.length;$('q-delcount').textContent=del.length;
-  var h='<div class="placeholder">只收需要外部資訊或公司說明才能回答的事項；分數、名次、觸發等評分內容在報告 2a 追蹤。手動修改標示「人工」，AI 之後不會覆蓋；刪除的問題可恢復。</div>';
+  var h=PAGES?'<div class="placeholder" id="q-store">'+esc(QSTORE())+'</div><div class="placeholder">只收需要外部資訊或公司說明才能回答的事項；分數、名次、觸發等評分內容在報告 2a 追蹤。每則最多 1,000 字、每家公司最多 100 則；刪除的問題可恢復（已刪除最多保留 50 則）。</div>'
+    :'<div class="placeholder">只收需要外部資訊或公司說明才能回答的事項；分數、名次、觸發等評分內容在報告 2a 追蹤。手動修改標示「人工」，AI 之後不會覆蓋；刪除的問題可恢復。</div>';
   h+=act.map(qRow).join('')||'<div class="placeholder">目前沒有問題。可手動新增。</div>';
   if(QS.showDel&&del.length)h+='<div class="placeholder" style="margin-top:6px">已刪除：</div>'+del.map(qRow).join('');
   if(QS.form){
-    h+='<div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:8px"><label class="sub" for="q-text">問題內容</label><textarea id="q-text" rows="3" style="background:var(--surface2);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:6px;font:inherit;resize:vertical" placeholder="例：法說會提到的新產品線，下一季營收是否開始貢獻？"></textarea><div class="sub">相關大項（選填）</div><div id="q-maj" style="display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px">'+
+    h+='<div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:8px"><label class="sub" for="q-text">問題內容</label><textarea id="q-text" rows="3" maxlength="1000" style="background:var(--surface2);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:6px;font:inherit;resize:vertical" placeholder="例：法說會提到的新產品線，下一季營收是否開始貢獻？"></textarea><div class="sub">相關大項（選填）</div><div id="q-maj" style="display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px">'+
       MAJ.map(function(m){return '<label><input type="checkbox" value="'+esc(m)+'"> '+esc(m)+'</label>';}).join('')+'</div><div style="display:flex;gap:8px"><button class="btn primary sm" data-qsave="1">新增</button><button class="btn sm" data-qcancel="1">取消</button></div></div>';
   }else h+='<button class="btn sm" data-qadd="1" style="align-self:flex-start">＋ 新增問題</button>';
   $('q-body').innerHTML=h;
@@ -438,9 +440,9 @@ document.addEventListener('change',function(e){var t=e.target;if(!t.dataset||!t.
   qWrite('PUT','/'+encodeURIComponent(q.question_id),{text:q.body,status:t.value,related_items:q.related_items||[],evidence:q.evidence||[],status_reason:q.status_reason||null},null,'已改為「'+QSTZ[t.value]+'」（人工）');});
 document.addEventListener('click',function(e){
   var t=e.target.closest('button');if(!t)return;var d=t.dataset;
-  if(d.qadd){if(!SRV.auth){showLogin(function(){QS.form=true;qRender();});return;}QS.form=true;qRender();var x=$('q-text');if(x)x.focus();return;}
+  if(d.qadd){if(!SRV.auth&&!PAGES){showLogin(function(){QS.form=true;qRender();});return;}QS.form=true;qRender();var x=$('q-text');if(x)x.focus();return;}
   if(d.qcancel){QS.form=false;qRender();return;}
-  if(d.qsave){var tx=$('q-text').value.trim();if(!tx){$('q-text').focus();return;}var rel=[];document.querySelectorAll('#q-maj input:checked').forEach(function(c){rel.push(c.value);});QS.form=false;qWrite('POST','',{text:tx,related_items:rel,evidence:['人工']},uuid(),'已新增（人工）');return;}
+  if(d.qsave){var tx=$('q-text').value.trim();if(!tx){$('q-text').focus();return;}if(tx.length>1000){toast('每則問題最多 1,000 字（目前 '+tx.length+' 字）');return;}var rel=[];document.querySelectorAll('#q-maj input:checked').forEach(function(c){rel.push(c.value);});QS.form=false;qWrite('POST','',{text:tx,related_items:rel,evidence:['人工']},uuid(),'已新增（人工）');return;}
   if(d.qdel){var q=qFind(d.qdel);qWrite('DELETE','/'+encodeURIComponent(d.qdel),null,null,null);toast('已刪除 '+d.qdel,function(){qWrite('POST','/'+encodeURIComponent(d.qdel)+'/restore',null,null,'已恢復');});return;}
   if(d.qrestore){qWrite('POST','/'+encodeURIComponent(d.qrestore)+'/restore',null,null,'已恢復');return;}
   if(t.id==='q-showdel'){QS.showDel=!QS.showDel;qRender();return;}
@@ -1083,11 +1085,11 @@ function stRender(){
     ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google／Bing 新聞（後端每 30 分鐘更新；未開通時顯示「尚未提供」）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
     ['報告',PAGES?'依請求產生（登入帳號後可送出，最多 20 筆；不支援上傳參考資料）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
     ['備份',!bk.enabled?(PAGES?'未提供（後端不做自動備份；匯出方式待確認）':'未設定'):(bk.status==='PASS'?'正常｜最後完成 '+v(bk.completed_at):'🔴 異常｜'+v(bk.error_code))],
-    ['資料儲存',PAGES?(window.KupeiAuth&&window.KupeiAuth.session()?'這台瀏覽器；已登入 '+window.KupeiAuth.session().username+'，自選與設定依帳號雲端同步':'這台瀏覽器（未登入；登入後自選與設定可跨裝置同步）'):(SRV.mode==='server'?'主機（跨裝置同步）':'這台瀏覽器（主機寫入服務未啟用）')]
+    ['資料儲存',PAGES?(window.KupeiAuth&&window.KupeiAuth.session()?'這台瀏覽器；已登入 '+window.KupeiAuth.session().username+'，自選、設定與個股問題依帳號雲端同步':'這台瀏覽器（未登入；登入後自選、設定與個股問題可跨裝置同步）'):(SRV.mode==='server'?'主機（跨裝置同步）':'這台瀏覽器（主機寫入服務未啟用）')]
   ];
   $('st-kv').innerHTML=kv.map(function(x){return '<div><div class="k">'+esc(x[0])+'</div><div class="v">'+esc(x[1])+'</div></div>';}).join('');
   var lg=SRV.mode!=='server'?'':(SRV.auth?'已登入　<button class="btn sm" data-logout="1">登出</button>':'未登入（可瀏覽，不能修改）　<button class="btn sm primary" data-login="1">登入</button>');
-  $('st-src').innerHTML=(lg?'<div style="margin-bottom:8px">登入狀態：'+lg+'</div>':'')+(PAGES?'評分與明細：後端 Server API 的批次資料（/data/…，依 manifest 版本）<br>行情：每日收盤與近 20 日、近 5 月營收（/api/market/…），非即時<br>自選群組與新聞／報告設定：存在這台瀏覽器；登入後依帳號雲端同步':'首頁與個股資料：/api/v1/home、/api/v1/companies/{代號}（依正式 pointer）<br>行情：FinMind 全市場快照，主機每 30 秒抓取並推送；畫面標示資料來源 FinMind<br>自選群組、新聞與報告設定、個股問題：'+(SRV.mode==='server'?'存在主機':'目前只存在這台瀏覽器'));
+  $('st-src').innerHTML=(lg?'<div style="margin-bottom:8px">登入狀態：'+lg+'</div>':'')+(PAGES?'評分與明細：後端 Server API 的批次資料（/data/…，依 manifest 版本）<br>行情：每日收盤與近 20 日、近 5 月營收（/api/market/…），非即時<br>自選群組、新聞／報告設定與個股問題：存在這台瀏覽器；登入後依帳號雲端同步':'首頁與個股資料：/api/v1/home、/api/v1/companies/{代號}（依正式 pointer）<br>行情：FinMind 全市場快照，主機每 30 秒抓取並推送；畫面標示資料來源 FinMind<br>自選群組、新聞與報告設定、個股問題：'+(SRV.mode==='server'?'存在主機':'目前只存在這台瀏覽器'));
 }
 /* ================= router ================= */
 var lastScroll={},curPage='home';

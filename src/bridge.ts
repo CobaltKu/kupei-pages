@@ -7,7 +7,7 @@
  *   報告        /api/reports/<代號>…（列表、單篇、產生請求；請求只限登入帳號）
  *   帳號與同步  /api/auth/*、/api/store/<key>（依帳號分開的雲端文件）
  * 這一層把它們轉成 UI 原本要的形狀（window.KupeiAPI），不重算任何分數、名次或 Gate；缺的資料就回「尚未提供」。
- * 自選、新聞與報告設定仍存本機（kupei3_*）；登入後以雲端文件同步（見下方 sync）。
+ * 自選、新聞與報告設定、個股問題存本機（kupei3_*）；登入後以雲端文件同步（見下方 sync）。
  */
 import './bridge.css'
 import { createKupeiClient, KupeiError, quoteOf } from './kupei-client'
@@ -435,6 +435,158 @@ async function requestReport(code: string, body: any): Promise<Reply> {
   }
 }
 
+/* ---- 個股問題（後端沒有對應端點：存本機 kupei3_questions，登入後以雲端文件 ui-questions 同步，見 SYNC） ---- */
+/*
+ * 本機格式：{ "<代號>": [問題…] }，整份一個雲端文件（不每家公司一份，避免超過每人 50 份）。
+ * 問題物件沿用原 FastAPI 版的欄位：question_id、body、status、manual_locked、first_seen、updated_at、
+ * related_items、evidence、status_reason、deleted、deleted_at。
+ * 內容可能被雲端同步改寫（任何持有該帳號權杖的人都能寫），每次讀取都重新驗證，不合格的丟掉。
+ */
+const QKEY = 'kupei3_questions'
+const Q_CODE = /^[0-9A-Za-z]{4}$/
+const Q_ID = /^Q-\d{1,6}$/
+const Q_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/
+const Q_STATUS = ['NEW', 'STILL_VALID', 'RESOLVED', 'UNDETERMINED']
+const Q_LIMITS = { text: 1000, perCompany: 100, deletedKept: 50, bytes: 200_000, items: 20, itemLen: 50, reason: 200 }
+interface Question {
+  question_id: string; body: string; status: string; manual_locked: boolean; first_seen: string; updated_at: string
+  related_items: string[]; evidence: string[]; status_reason: string | null; deleted: boolean; deleted_at: string | null
+}
+type QStore = Record<string, Question[]>
+
+const qTime = (x: unknown): string | null => (typeof x === 'string' && Q_TIME.test(x) && !Number.isNaN(Date.parse(x)) ? x : null)
+const qList = (a: unknown): string[] => {
+  const out: string[] = []
+  if (Array.isArray(a)) for (const s of a) { if (typeof s !== 'string') continue; const t = s.trim().slice(0, Q_LIMITS.itemLen); if (t && !out.includes(t) && out.length < Q_LIMITS.items) out.push(t) }
+  return out
+}
+function cleanQuestion(q: any): Question | null {
+  if (!q || typeof q !== 'object' || Array.isArray(q)) return null
+  if (typeof q.question_id !== 'string' || !Q_ID.test(q.question_id)) return null
+  if (typeof q.body !== 'string') return null
+  const body = q.body.trim().slice(0, Q_LIMITS.text)
+  const first = qTime(q.first_seen)
+  if (!body || !first) return null
+  return {
+    question_id: q.question_id, body, status: Q_STATUS.includes(q.status) ? q.status : 'NEW', manual_locked: q.manual_locked === true,
+    first_seen: first, updated_at: qTime(q.updated_at) ?? first, related_items: qList(q.related_items), evidence: qList(q.evidence),
+    status_reason: typeof q.status_reason === 'string' && q.status_reason ? q.status_reason.slice(0, Q_LIMITS.reason) : null,
+    deleted: q.deleted === true, deleted_at: q.deleted === true ? qTime(q.deleted_at) : null,
+  }
+}
+/** 讀本機並驗證；壞掉或形狀不對 → 空的 */
+function qRead(): QStore {
+  let raw: any = null
+  try { raw = JSON.parse(localStorage.getItem(QKEY) || 'null') } catch { /* 壞掉當作沒有 */ }
+  const out: QStore = Object.create(null)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [code, list] of Object.entries(raw)) {
+    if (!Q_CODE.test(code) || !Array.isArray(list)) continue
+    const seen = new Set<string>()
+    const qs: Question[] = []
+    for (const x of list.slice(0, Q_LIMITS.perCompany + Q_LIMITS.deletedKept)) {
+      const q = cleanQuestion(x)
+      if (q && !seen.has(q.question_id)) { seen.add(q.question_id); qs.push(q) }
+    }
+    if (qs.length) out[code.toUpperCase()] = qs
+  }
+  return out
+}
+/** 整份存成雲端文件後大約的大小（UTF-8 位元組；雲端文件是 { savedAt, value: <這份 JSON 字串> }） */
+const qBytes = (s: string) => new TextEncoder().encode(JSON.stringify({ savedAt: new Date().toISOString(), value: s })).length
+/** 版本＝該公司問題內容的雜湊：另一個分頁或同步改過就對不上，回 409 讓 UI 重新載入 */
+function qVersion(list: Question[] | undefined): number {
+  const s = JSON.stringify(list || [])
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) }
+  return list && list.length ? (h >>> 0) + 1 : 0
+}
+/** 台灣時間 ISO（+08:00），首次日期（first_seen 前 10 碼）才會是台灣的日期 */
+function qNow(): string {
+  const d = new Date(Date.now() + 8 * 3600e3)
+  return d.toISOString().slice(0, 19) + '+08:00'
+}
+const qErr = (status: number, code: string, msg: string): Reply => ({ ok: false, status, data: { error_code: code, message_zh: msg } })
+const qOut = (code: string, list: Question[] | undefined, all: boolean): Reply =>
+  ok({ company_id: code, version: qVersion(list), questions: (list || []).filter((q) => all || !q.deleted).map((q) => ({ ...q })) })
+const qIdem = new Map<string, string>() // Idempotency-Key → 已新增的 question_id（這次開頁面內有效）
+
+/** check＝這次會讓內容變大（新增、改長）才檢查總量；刪除、恢復、改短一定要能存（已超過上限的資料也要能整理） */
+function qSave(st: QStore, check: boolean): Reply | null {
+  const s = JSON.stringify(st)
+  if (check && qBytes(s) > Q_LIMITS.bytes) return qErr(413, 'Q_TOO_LARGE', `個股問題總量已達上限（約 ${Math.round(Q_LIMITS.bytes / 1000)} KB），請刪減內容後再試`)
+  try { localStorage.setItem(QKEY, s) } catch { return qErr(507, 'Q_STORAGE_FULL', '瀏覽器儲存空間不足，無法儲存') }
+  return null
+}
+
+function questionsReq(m: string, seg: string[], qs: string, body: any, headers: Record<string, string>): Reply {
+  const code = seg[2].toUpperCase()
+  const st = qRead()
+  const list = st[code] || []
+  const all = new URLSearchParams(qs).get('include_deleted') === 'true'
+  if (m === 'GET' && seg.length === 4) return qOut(code, st[code], all)
+  // 寫入：If-Match 帶的版本要等於目前內容的版本（其他分頁、雲端同步改過 → 409，UI 會重新載入）
+  const im = headers['If-Match'] ?? headers['if-match']
+  if (im != null && im !== '' && Number(im) !== qVersion(st[code])) return qErr(409, 'VERSION_CONFLICT', '資料已在其他分頁或裝置更新')
+  const b = body && typeof body === 'object' ? body : {}
+  const text = (x: unknown) => (typeof x === 'string' ? x.trim() : '')
+  if (m === 'POST' && seg.length === 4) {
+    const idem = headers['Idempotency-Key'] ?? headers['idempotency-key']
+    if (idem && qIdem.has(idem) && list.some((q) => q.question_id === qIdem.get(idem))) return qOut(code, list, true) // 重複送出：不再新增
+    const t = text(b.text)
+    if (!t) return qErr(400, 'Q_EMPTY', '請輸入問題內容')
+    if (t.length > Q_LIMITS.text) return qErr(400, 'Q_TOO_LONG', `每則問題最多 ${Q_LIMITS.text.toLocaleString()} 字（目前 ${t.length.toLocaleString()} 字）`)
+    if (list.filter((q) => !q.deleted).length >= Q_LIMITS.perCompany) return qErr(400, 'Q_LIMIT', `每家公司最多 ${Q_LIMITS.perCompany} 則問題，請先刪除不需要的`)
+    const n = list.reduce((mx, q) => Math.max(mx, Number(q.question_id.slice(2)) || 0), 0) + 1
+    const now = qNow()
+    const q: Question = {
+      question_id: 'Q-' + String(n).padStart(3, '0'), body: t, status: 'NEW', manual_locked: true, first_seen: now, updated_at: now,
+      related_items: qList(b.related_items), evidence: qList(b.evidence), status_reason: null, deleted: false, deleted_at: null,
+    }
+    st[code] = [...list, q]
+    const e = qSave(st, true)
+    if (e) return e
+    if (idem) qIdem.set(idem, q.question_id)
+    return qOut(code, st[code], true)
+  }
+  const qid = seg[4] || ''
+  const i = list.findIndex((q) => q.question_id === qid)
+  if (i < 0) return qErr(404, 'QUESTION_NOT_FOUND', '找不到這則問題（可能已在其他裝置更新），請重新整理')
+  const cur = list[i]
+  const now = qNow()
+  let next: Question
+  if ((m === 'PUT' || m === 'PATCH') && seg.length === 5) {
+    if (cur.deleted) return qErr(400, 'QUESTION_DELETED', '已刪除的問題要先恢復才能修改')
+    const t = b.text === undefined && m === 'PATCH' ? cur.body : text(b.text)
+    if (!t) return qErr(400, 'Q_EMPTY', '請輸入問題內容')
+    if (t.length > Q_LIMITS.text) return qErr(400, 'Q_TOO_LONG', `每則問題最多 ${Q_LIMITS.text.toLocaleString()} 字（目前 ${t.length.toLocaleString()} 字）`)
+    const status = b.status === undefined && m === 'PATCH' ? cur.status : b.status
+    if (!Q_STATUS.includes(status)) return qErr(400, 'Q_BAD_STATUS', '狀態不正確')
+    next = {
+      ...cur, body: t, status, manual_locked: true, updated_at: now,
+      related_items: b.related_items === undefined ? cur.related_items : qList(b.related_items),
+      evidence: b.evidence === undefined ? cur.evidence : qList(b.evidence),
+      status_reason: b.status_reason === undefined ? cur.status_reason : typeof b.status_reason === 'string' && b.status_reason ? b.status_reason.slice(0, Q_LIMITS.reason) : null,
+    }
+  } else if (m === 'DELETE' && seg.length === 5) {
+    next = { ...cur, deleted: true, deleted_at: now, updated_at: now }
+  } else if (m === 'POST' && seg.length === 6 && seg[5] === 'restore') {
+    if (cur.deleted && list.filter((q) => !q.deleted).length >= Q_LIMITS.perCompany) return qErr(400, 'Q_LIMIT', `每家公司最多 ${Q_LIMITS.perCompany} 則問題，請先刪除不需要的`)
+    next = { ...cur, deleted: false, deleted_at: null, updated_at: now }
+  } else return { ok: false, status: 404, data: { error_code: 'NOT_PROVIDED' } }
+  let out = list.map((q, k) => (k === i ? next : q))
+  // 已刪除的只保留最近 deletedKept 則（最舊的永久移除），整份大小才有上限
+  const del = out.filter((q) => q.deleted).sort((a, c) => String(c.deleted_at).localeCompare(String(a.deleted_at)))
+  if (del.length > Q_LIMITS.deletedKept) { const drop = new Set(del.slice(Q_LIMITS.deletedKept)); out = out.filter((q) => !drop.has(q)) }
+  st[code] = out
+  if (!out.length) delete st[code]
+  const grows = JSON.stringify(next.body).length + JSON.stringify(next.related_items).length + JSON.stringify(next.status_reason).length >
+    JSON.stringify(cur.body).length + JSON.stringify(cur.related_items).length + JSON.stringify(cur.status_reason).length
+  const e = qSave(st, grows)
+  if (e) return e
+  return qOut(code, st[code], true)
+}
+
 /* ---------------- window.KupeiAPI（UI 的資料層介面） ---------------- */
 
 const ok = (data: any): Reply => ({ ok: true, status: 200, data })
@@ -442,7 +594,7 @@ const no = (status = 404): Reply => ({ ok: false, status, data: null })
 let datasetP: Promise<Dataset> | null = null
 const loadDs = () => (datasetP ??= client.loadDataset())
 
-async function req(method: string, path: string, body?: unknown): Promise<Reply> {
+async function req(method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<Reply> {
   const m = method.toUpperCase()
   const [p, qs = ''] = path.split('?')
   const seg = p.split('/').map((s) => { try { return decodeURIComponent(s) } catch { return '' } })
@@ -480,6 +632,11 @@ async function req(method: string, path: string, body?: unknown): Promise<Reply>
         return ok({ sources })
       } catch (e) { return errReply(e) }
     }
+    // 個股問題：/companies/<代號>/questions[?include_deleted=true]、/<問題>（PUT／PATCH／DELETE）、/<問題>/restore（POST）；存本機 kupei3_questions
+    if (seg[1] === 'companies' && seg[3] === 'questions' && seg.length >= 4 && seg.length <= 6) {
+      if (!Q_CODE.test(seg[2] || '')) return { ok: false, status: 400, data: { error_code: 'COMPANY_NOT_FOUND' } }
+      return questionsReq(m, seg, qs, body, headers && typeof headers === 'object' ? headers : {})
+    }
     // 報告：/reports/<代號>、/reports/<代號>/<期別>/<版次>、POST /reports/<代號>/requests；/inputs（上傳參考資料）後端不支援
     if (seg[1] === 'reports' && /^\d{4}$/.test(seg[2] || '')) {
       const code = seg[2]
@@ -514,7 +671,7 @@ async function req(method: string, path: string, body?: unknown): Promise<Reply>
   } catch (e) {
     return no(e instanceof KupeiError ? e.status : 502)
   }
-  // 自選、設定、登入、報告參考資料、個股問題：Pages 版沒有對應的後端端點，UI 走本機模式或顯示「尚未提供」
+  // 自選、設定、登入、報告參考資料：Pages 版沒有對應的後端端點，UI 走本機模式或顯示「尚未提供」
   return no(404)
 }
 
@@ -548,16 +705,16 @@ const api = {
   },
 }
 
-/* ---------------- 雲端同步：本機三份資料 ⇄ 帳號的雲端文件 ---------------- */
+/* ---------------- 雲端同步：本機四份資料 ⇄ 帳號的雲端文件 ---------------- */
 
 /** 可以同步＝已登入帳號，或使用舊的寫入權杖（相容保留，Adem 說明之後以登入取代） */
 const canSync = () => !!client.getSession() || client.hasWriteToken()
 const syncUser = () => client.getSession()?.username ?? '寫入權杖'
 
-const SYNC: Record<string, string> = { kupei3_watch: 'ui-watch', kupei3_news: 'ui-news', kupei3_report: 'ui-report' }
+const SYNC: Record<string, string> = { kupei3_watch: 'ui-watch', kupei3_news: 'ui-news', kupei3_report: 'ui-report', kupei3_questions: 'ui-questions' }
 const META = 'kupei3_sync'
 /**
- * owner＝本機這三份資料屬於哪個帳號（最後一次同步的帳號；寫入權杖算「寫入權杖」）。登出時不清，
+ * owner＝本機這幾份資料屬於哪個帳號（最後一次同步的帳號；寫入權杖算「寫入權杖」）。登出時不清，
  * 下次換另一個帳號（或寫入權杖）同步時靠它判斷要不要先把本機資料備份並改用雲端那份。
  */
 interface Meta { owner?: string; versions: Record<string, number>; dirty: Record<string, boolean> }
