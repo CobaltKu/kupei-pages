@@ -3,8 +3,12 @@
 // 如果 repo 名稱正好是 <帳號>.github.io，網址沒有子路徑，PAGES_BASE 要設成 "/"。
 import { defineConfig } from 'vite'
 
+// 建置編號：app.js（bridge.ts 用 __BUILD__）與 index.html 的 styles.css（?v=__BUILD__）共用，換版後瀏覽器不會用到舊快取
+const BUILD = process.env.GITHUB_SHA?.slice(0, 7) ?? Date.now().toString(36)
+
 export default defineConfig({
   base: process.env.PAGES_BASE ?? '/',
-  // 讓 app.js 的網址帶建置編號，換版後瀏覽器不會用到舊快取
-  define: { __BUILD__: JSON.stringify(process.env.GITHUB_SHA?.slice(0, 7) ?? Date.now().toString(36)) },
+  define: { __BUILD__: JSON.stringify(BUILD) },
+  // define 只作用在 JS；index.html 裡的 __BUILD__ 在這裡換掉
+  plugins: [{ name: 'kupei-build-id', transformIndexHtml: (html) => html.replaceAll('__BUILD__', BUILD) }],
 })
