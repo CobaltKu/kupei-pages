@@ -27,6 +27,7 @@ UI 不重算任何分數、名次或 Gate；後端沒有的資料（估價、第
 
 - `tests/e2e_pages.mjs`：對線上 Workers 資料跑完整 UI（首頁、個股、自選、各設定頁、狀態、說明、帳號視窗、手機寬度），18 項。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages.mjs`
 - `tests/e2e_pages_account.mjs`：用假的帳號端點測邀請碼欄位（依 `/api/auth/config`）與改密碼，6 項；不建立真實帳號。需 `ENVFILE`（同下）。
+- `tests/e2e_pages_account2.mjs`：用假的帳號與雲端文件端點測「忘記密碼」（登入畫面連結切換、欄位驗證、重設碼錯 401 的訊息、成功後已登入且 `kupei:session` 換新並提示其他裝置已登出）與「匯入舊的寫入權杖資料」（權杖錯、沒有資料可匯入、摘要與確認後寫進帳號雲端、本機換新且 `kupei3_*_prev` 有備份、409 重讀版本重試一次、額度已滿不重試、權杖不進網址與 storage），13 項；不建立真實帳號。需 `ENVFILE`；`SHOTS=<資料夾>` 另存截圖。
 - `tests/e2e_pages_xss.mjs`：在 `localStorage` 預先放入惡意或結構錯誤的 `kupei3_watch`／`kupei3_news`／`kupei3_report`（模擬被改寫的雲端文件）後載入各頁，確認注入的程式沒有執行、不合格的群組與欄位被丟棄、頁面仍正常顯示，8 項；不需登入。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages_xss.mjs`
 - `tests/e2e_pages_sync.mjs`：用假的帳號與雲端文件端點測同步邏輯（首次登入上傳、跨裝置、版本衝突、舊寫入權杖、登出、換帳號不混資料、版本號巧合、409 無文件、啟動同步逾時），11 項；不建立真實帳號。需 `ENVFILE=<.env.local 完整路徑>`（資料請求改帶唯讀權杖，只在記憶體使用）。
 - `tests/e2e_pages_live.mjs`：盤中行情、新聞、報告（後端新端點全部用假的回應，評分與收盤行情用線上資料），14 項：盤中 CLOSED／OPEN／stale 三種標示與價格覆蓋（盤中沒成交顯示「—」、價格欄名稱改「盤中價」）、只有盤中依 `ttlSeconds` 重抓（用 Playwright 假時鐘）、產業與個股新聞的請求參數（關鍵字與排除字來自本機新聞設定、`days`）、惡意標題不執行、非 https 連結不可點、新聞來源與停用來源、報告列表與單篇（summary 原樣以文字顯示、不解析 markdown）、產生報告請求（未登入引導登入、登入後 202、重複回同一筆、`QUOTA_EXCEEDED` 提示）；不建立真實帳號。需 `ENVFILE`，`BASE` 用無權杖版建置。`SHOTS=<資料夾>` 另存截圖。

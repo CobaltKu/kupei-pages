@@ -25,7 +25,7 @@ type Reply = { ok: boolean; status: number; data: any }
 /* 帳號視窗與同步狀態（放在最前面，避免 client 建立過程觸發 onSessionChange 時還沒初始化） */
 let syncMsg = ''
 let pushTimer = 0
-let mode: 'login' | 'register' = 'login'
+let mode: 'login' | 'register' | 'reset' = 'login'
 let acctOpen = false
 let formMsg = ''
 /** 註冊要不要邀請碼：null＝還不知道（config 沒回來或失敗時不擋，等後端回 INVITE_REQUIRED 再顯示欄位） */
@@ -36,6 +36,15 @@ let pwOk = false
 let pwOpen = false
 /** 改密碼成功後下一次重畫不還原輸入框（舊密碼不該留在畫面上） */
 let wipeInputs = false
+/** 重新載入後要顯示在帳號視窗的提示（重設密碼成功、匯入完成；經 sessionStorage 帶過重新載入） */
+let notice = ''
+/* 匯入舊的寫入權杖資料：權杖只在 impRead() 的區域變數裡用一次，這裡只留讀到的內容 */
+let impOpen = false
+let impMsg = ''
+let impErr = false
+let impBusy = false
+let impDocs: { lk: string; dk: string; updatedAt: string | null; value: string }[] | null = null
+let impOther = 0
 
 const client = createKupeiClient({
   baseUrl: BASE,
@@ -742,7 +751,60 @@ const ERR: Record<string, string> = {
   BAD_REQUEST: '帳號或密碼格式不符：帳號 3～32 字（英數與 _ . -，開頭英數），密碼 8～128 字', UNAUTHENTICATED: '登入已過期，請重新登入',
   INVITE_REQUIRED: '需要邀請碼，請輸入維護者給你的邀請碼', INVITE_INVALID: '邀請碼不對',
 }
+/** 重設密碼的錯誤訊息（後端碼錯、過期、用過、帳號停用一律回 401 INVALID_CREDENTIALS） */
+const RESET_ERR: Record<string, string> = {
+  ...ERR, INVALID_CREDENTIALS: '帳號或重設碼不正確，或重設碼已過期',
+  BAD_REQUEST: '格式不符：帳號 3～32 字（英數與 _ . -，開頭英數），新密碼 8～128 字', NOT_FOUND: '重設密碼功能尚未開通，請稍後再試',
+}
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+const USER_RE = /^[a-z0-9][a-z0-9_.-]{2,31}$/
+const FLASH_KEY = 'kupei:acct-flash'
+/** 存一段提示，重新載入後打開帳號視窗顯示 */
+const flash = (t: string) => { try { sessionStorage.setItem(FLASH_KEY, t) } catch { /* ignore */ } }
+const taipeiTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '時間不明')
+const DOC_LABEL: Record<string, string> = { kupei3_watch: '自選群組', kupei3_news: '新聞設定', kupei3_report: '報告設定' }
+
+/** 非 2xx 回應 → KupeiError（形狀同 kupei-client：{ error: { code, message, details } }） */
+async function errFrom(res: Response): Promise<KupeiError> {
+  let e: Json = {}
+  try { const j = await res.json(); if (j && typeof j.error === 'object' && j.error) e = j.error } catch { /* 不是 JSON */ }
+  const ra = res.headers.get('Retry-After')
+  return new KupeiError(
+    res.status,
+    typeof e.code === 'string' ? e.code : res.status === 401 ? 'UNAUTHENTICATED' : res.status === 404 ? 'NOT_FOUND' : `HTTP_${res.status}`,
+    typeof e.message === 'string' ? e.message : `HTTP ${res.status}`,
+    ra && /^\d+$/.test(ra.trim()) ? Number(ra) : null,
+    e.details,
+  )
+}
+
+/* ---- 忘記密碼（K-33） ----
+ * POST /api/auth/reset { username, code, newPassword }：成功回應同 login（{ user, token, expiresAt }），等同登入；
+ * 失敗 401 INVALID_CREDENTIALS（碼錯、過期、用過、帳號停用都一樣）、400 BAD_REQUEST、429 RATE_LIMITED。
+ * TODO：starter 加入 client.auth.resetPassword(username, code, newPassword) 後改用它，這個函式整個換成一行呼叫，
+ * 呼叫端的「寫 storage＋重新載入」也一起刪掉（client 會自己 setSession、觸發 onSessionChange）。
+ * 現在 kupei-client.ts 沒有公開 setSession，所以照它的 storage key（kupei:session）與格式 { token, username, expiresAt } 寫入，
+ * 由呼叫端重新載入頁面讓 client 讀到新的 session（client 只在建立時讀 storage）。
+ */
+async function resetPassword(username: string, code: string, newPassword: string): Promise<void> {
+  const res = await fetch(BASE + '/api/auth/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, code, newPassword }),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(20000),
+  })
+  if (!res.ok) throw await errFrom(res)
+  const r = (await res.json()) as Json
+  if (!r || typeof r.token !== 'string' || !r.token || typeof r.user?.username !== 'string' || typeof r.expiresAt !== 'string') {
+    throw new KupeiError(502, 'BAD_RESPONSE', '回應格式不對')
+  }
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ token: r.token, username: r.user.username, expiresAt: r.expiresAt }))
+}
+
+/** 重設碼：去掉空白與 -，12 字元才合格；送出時排成管理頁顯示的 XXXX-XXXX-XXXX（大小寫不動） */
+const codeChars = (s: string) => s.replace(/[\s-]/g, '')
+const codeFmt = (c: string) => `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}`
 
 /** 切到「建立帳號」時問一次後端要不要邀請碼（成功就快取，失敗下次再問） */
 function loadInviteConfig() {
@@ -769,6 +831,7 @@ function renderAcct() {
   if (s) {
     host.innerHTML = `<div class="acct-backdrop" data-acct-close="1"></div><div class="acct-modal" role="dialog" aria-label="帳號">
       <h2>帳號</h2><p>已登入：<b>${esc(s.username)}</b>（有效至 ${esc(s.expiresAt.slice(0, 10))}）</p>
+      ${notice ? `<p class="acct-ok" id="acct-notice">${esc(notice)}</p>` : ''}
       <p class="acct-muted">自選群組與新聞／報告設定依帳號存到雲端，換裝置登入同一帳號就同步。${esc(syncMsg ? '　' + syncMsg : '')}</p>
       <div class="acct-row"><button class="acct-btn" data-acct-sync="1">立即同步</button><button class="acct-btn ghost" data-acct-logout="1">登出</button><button class="acct-btn ghost" data-acct-close="1">關閉</button></div>
       <details class="acct-adv" id="acct-pw-box"${pwOpen ? ' open' : ''}><summary>改密碼</summary>
@@ -778,15 +841,37 @@ function renderAcct() {
         <label>再輸入一次新密碼<input id="acct-pw-new2" type="password" autocomplete="new-password" maxlength="128"></label>
         <p class="${pwOk ? 'acct-muted' : 'acct-err'}" id="acct-pw-msg">${esc(pwMsg)}</p>
         <div class="acct-row"><button class="acct-btn" data-acct-pw="1">更改密碼</button></div></details>
-      <p class="acct-muted">登出後資料保留在這台瀏覽器；目前沒有忘記密碼功能。</p></div>`
+      <details class="acct-adv" id="acct-imp-box"${impOpen ? ' open' : ''}><summary>匯入舊的寫入權杖資料</summary>
+        <p class="acct-muted">以前用「寫入權杖」同步的自選與設定，可以搬進這個帳號。權杖只用來讀一次，不會存起來；舊的資料不會被刪除。</p>
+        ${impDocs ? `<p>找到 ${impDocs.length} 份可匯入的資料：</p><ul class="acct-list" id="acct-imp-list">${impDocs.map((d) => `<li>${esc(DOC_LABEL[d.lk] ?? d.dk)}<span class="acct-muted">更新於 ${esc(taipeiTime(d.updatedAt))}</span></li>`).join('')}</ul>
+        ${impOther ? `<p class="acct-muted">另有 ${impOther} 份不是本站同步用的文件，不會匯入。</p>` : ''}
+        <p class="acct-muted">匯入後會取代這個帳號目前的這些資料；這台瀏覽器原本的內容會先備份（kupei3_*_prev）。</p>
+        <div class="acct-row"><button class="acct-btn" data-acct-imp-go="1"${impBusy ? ' disabled' : ''}>確認匯入</button><button class="acct-btn ghost" data-acct-imp-cancel="1"${impBusy ? ' disabled' : ''}>取消</button></div>`
+        : `<input id="acct-imp-wt" type="password" placeholder="寫入權杖" autocomplete="off" spellcheck="false">
+        <div class="acct-row"><button class="acct-btn" data-acct-imp-read="1"${impBusy ? ' disabled' : ''}>讀取</button></div>`}
+        <p class="${impErr ? 'acct-err' : 'acct-muted'}" id="acct-imp-msg">${esc(impMsg)}</p></details>
+      <p class="acct-muted">登出後資料保留在這台瀏覽器。忘記密碼時，請向管理員索取重設碼，在登入畫面按「忘記密碼？」。</p></div>`
+  } else if (mode === 'reset') {
+    host.innerHTML = `<div class="acct-backdrop" data-acct-close="1"></div><div class="acct-modal" role="dialog" aria-label="重設密碼">
+      <h2>重設密碼</h2>
+      <p class="acct-muted">請向管理員索取重設碼（24 小時內有效、只能用一次）。重設後會直接登入，其他裝置的登入全部失效。</p>
+      <label>帳號<input id="acct-user" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="32"></label>
+      <label>重設碼<input id="acct-code" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="XXXX-XXXX-XXXX"></label>
+      <label>新密碼<input id="acct-rpass" type="password" autocomplete="new-password" maxlength="128"></label>
+      <label>再輸入一次新密碼<input id="acct-rpass2" type="password" autocomplete="new-password" maxlength="128"></label>
+      <p class="acct-muted">帳號 3～32 字（英數與 _ . -，開頭英數）；新密碼 8～128 字。</p>
+      <p class="acct-err" id="acct-err">${esc(formMsg)}</p>
+      <div class="acct-row"><button class="acct-btn" data-acct-submit="1">重設並登入</button><button class="acct-btn ghost" data-acct-back="1">返回登入</button><button class="acct-btn ghost" data-acct-close="1">取消</button></div></div>`
+    ;(document.getElementById('acct-user') as HTMLInputElement | null)?.focus()
   } else {
     host.innerHTML = `<div class="acct-backdrop" data-acct-close="1"></div><div class="acct-modal" role="dialog" aria-label="登入">
       <h2>${mode === 'login' ? '登入' : '建立帳號'}</h2>
       <p class="acct-muted">評分與行情不需要登入；登入後自選與設定可跨裝置同步。</p>
       <label>帳號<input id="acct-user" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="32"></label>
       <label>密碼<input id="acct-pass" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" maxlength="128"></label>
+      ${mode === 'login' ? '<p class="acct-forgot"><button type="button" class="acct-link" data-acct-forgot="1">忘記密碼？</button></p>' : ''}
       ${mode === 'register' && inviteRequired === true ? '<label>邀請碼<input id="acct-invite" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64"></label>' : ''}
-      ${mode === 'register' ? '<label>再輸入一次密碼<input id="acct-pass2" type="password" autocomplete="new-password" maxlength="128"></label><p class="acct-muted">帳號 3～32 字（英數與 _ . -，開頭英數，自動轉小寫）；密碼 8～128 字。目前沒有忘記密碼功能。</p>' : ''}
+      ${mode === 'register' ? '<label>再輸入一次密碼<input id="acct-pass2" type="password" autocomplete="new-password" maxlength="128"></label><p class="acct-muted">帳號 3～32 字（英數與 _ . -，開頭英數，自動轉小寫）；密碼 8～128 字。忘記密碼時可向管理員索取重設碼。</p>' : ''}
       <p class="acct-err" id="acct-err">${esc(formMsg)}</p>
       <div class="acct-row"><button class="acct-btn" data-acct-submit="1">${mode === 'login' ? '登入' : '建立並登入'}</button><button class="acct-btn ghost" data-acct-mode="1">${mode === 'login' ? '建立帳號' : '改為登入'}</button><button class="acct-btn ghost" data-acct-close="1">取消</button></div>
       <details class="acct-adv"${client.hasWriteToken() ? ' open' : ''}><summary>進階：使用寫入權杖（舊做法，保留相容）</summary>
@@ -819,8 +904,128 @@ async function submitPassword() {
   renderAcct()
 }
 
+async function submitReset() {
+  const val = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value ?? ''
+  const u = val('acct-user').trim().toLowerCase(), code = codeChars(val('acct-code')), p1 = val('acct-rpass'), p2 = val('acct-rpass2')
+  if (!USER_RE.test(u)) formMsg = '帳號要 3～32 字（英數與 _ . -，開頭英數）'
+  else if (code.length !== 12) formMsg = '重設碼是 12 個字（XXXX-XXXX-XXXX）'
+  else if (p1.length < 8 || p1.length > 128) formMsg = '新密碼要 8～128 字'
+  else if (p2 !== p1) formMsg = '兩次輸入的新密碼不一樣'
+  else {
+    formMsg = '處理中…'; renderAcct()
+    try {
+      await resetPassword(u, codeFmt(code), p1)
+      // 新 session 已寫入 storage：重新載入讓 client 讀到（starter 有 resetPassword 後不用重新載入，見 resetPassword 註解）
+      flash('密碼已重設，其他裝置已登出')
+      frozen = true
+      window.clearTimeout(pushTimer)
+      location.reload()
+      return
+    } catch (e) {
+      formMsg = e instanceof KupeiError ? RESET_ERR[e.code] || `失敗（${e.status}）` : '無法連線，請稍後再試'
+    }
+  }
+  renderAcct()
+}
+
+/* ---- 匯入舊的寫入權杖資料（K-29） ----
+ * 以前用寫入權杖同步的資料存在共用的雲端文件（owner kupei）；改用帳號後看不到。
+ * 讀：用貼上的權杖 GET /api/store 列表＋SYNC 對照表裡的每份文件。權杖只在這個函式的區域變數裡，讀完就丟（不存、不印、不進網址）。
+ * 寫：使用者確認後，先備份本機到 kupei3_*_prev，再以帳號權杖 PUT 到帳號的同名文件（baseVersion＝帳號雲端目前版本，409 重讀後重試一次），
+ * 本機換成匯入內容後重新載入。舊文件不刪。
+ */
+async function impGet(token: string, path: string): Promise<Json> {
+  const res = await fetch(BASE + path, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store', signal: AbortSignal.timeout(20000) })
+  if (!res.ok) throw await errFrom(res)
+  return (await res.json()) as Json
+}
+
+async function impRead() {
+  const el = document.getElementById('acct-imp-wt') as HTMLInputElement | null
+  const token = el?.value.trim() ?? ''
+  if (el) el.value = '' // 重畫時不保留權杖
+  impOpen = true; impErr = false
+  if (!token) { impErr = true; impMsg = '請貼上寫入權杖'; renderAcct(); return }
+  impBusy = true; impMsg = '讀取中…'; renderAcct()
+  try {
+    const list = await impGet(token, '/api/store')
+    const docs: Json[] = (Array.isArray(list?.docs) ? list.docs : []).filter((d: any) => d && typeof d.key === 'string')
+    const keys = new Set(Object.values(SYNC))
+    const found: NonNullable<typeof impDocs> = []
+    for (const [lk, dk] of Object.entries(SYNC)) {
+      const meta = docs.find((d) => d.key === dk)
+      if (!meta || !(typeof meta.version === 'number' && meta.version > 0)) continue
+      const d = await impGet(token, `/api/store/${dk}`)
+      const v = d?.data
+      if (!v || typeof v !== 'object' || typeof v.value !== 'string') continue
+      found.push({ lk, dk, updatedAt: isoOrNull(d.updatedAt) ?? isoOrNull(meta.updatedAt), value: v.value })
+    }
+    impOther = docs.filter((d) => !keys.has(d.key)).length
+    if (found.length) { impDocs = found; impMsg = '' } else { impErr = true; impMsg = '這把權杖沒有資料可匯入' }
+  } catch (e) {
+    impErr = true
+    impMsg = e instanceof KupeiError
+      ? e.status === 401 || e.status === 403 ? '權杖不正確' : e.code === 'RATE_LIMITED' ? ERR.RATE_LIMITED : `讀取失敗（${e.status}）`
+      : '無法連線，請稍後再試'
+  } finally {
+    impBusy = false
+  }
+  renderAcct()
+}
+
+const impApply = () => serial(async () => {
+  const docs = impDocs
+  if (!docs || !client.getSession()) return
+  const who = syncUser()
+  impBusy = true; impErr = false; impMsg = '匯入中…'; renderAcct()
+  window.clearTimeout(pushTimer)
+  const meta = readMeta()
+  // 先備份這台目前的內容（覆蓋舊備份；本機沒有這份就不動舊備份）
+  for (const d of docs) { const cur = localStorage.getItem(d.lk); if (cur != null) setLocal(d.lk + '_prev', cur) }
+  let done = 0
+  try {
+    for (const d of docs) {
+      const body: CloudDoc = { savedAt: new Date().toISOString(), value: d.value }
+      let r
+      try {
+        r = await client.store.put(d.dk, body, (await client.store.get<CloudDoc>(d.dk)).version)
+      } catch (e) {
+        if (!(e instanceof KupeiError && e.status === 409)) throw e
+        // 讀到版本後到寫入前被別台裝置改了：重新讀取版本，只重試這一次
+        r = await client.store.put(d.dk, body, (await client.store.get<CloudDoc>(d.dk)).version)
+      }
+      if (syncUser() !== who) throw new Error('帳號已變更')
+      setLocal(d.lk, d.value)
+      meta.versions[d.dk] = r.version
+      meta.dirty[d.lk] = false
+      done++
+    }
+    meta.owner = who
+    writeMeta(meta)
+    impDocs = null; impBusy = false
+    flash(`已匯入 ${done} 份舊資料；這台原本的內容備份在 kupei3_*_prev`)
+    reloadSoon('已匯入舊資料，重新整理畫面…')
+  } catch (e) {
+    impBusy = false; impErr = true
+    impMsg = !(e instanceof KupeiError) ? '匯入失敗：無法連線，請稍後再試'
+      : e.status === 413 ? '匯入失敗：資料太大（單份上限 256 KB）'
+      : e.code === 'QUOTA_EXCEEDED' ? '匯入失敗：雲端空間已滿（每人 50 份、2 MB），請刪除不用的資料'
+      : e.status === 409 ? '匯入失敗：雲端資料剛被其他裝置更新，請再試一次'
+      : e.code === 'UNAUTHENTICATED' ? ERR.UNAUTHENTICATED
+      : `匯入失敗（${e.status}）`
+    if (done && syncUser() === who) {
+      // 已寫進帳號的那幾份本機也換掉了：存 meta、重新載入，提示帶過去
+      meta.owner = who
+      writeMeta(meta)
+      flash(`只匯入了 ${done}／${docs.length} 份。${impMsg}`)
+      reloadSoon('已匯入部分舊資料，重新整理畫面…')
+    } else renderAcct()
+  }
+})
+
 async function submitForm() {
-  const u = (document.getElementById('acct-user') as HTMLInputElement).value.trim().toLowerCase()
+  if (mode === 'reset') return submitReset()
+  const u =(document.getElementById('acct-user') as HTMLInputElement).value.trim().toLowerCase()
   const p = (document.getElementById('acct-pass') as HTMLInputElement).value
   if (!u || !p) { formMsg = '請輸入帳號與密碼'; renderAcct(); return }
   if (mode === 'register' && p !== (document.getElementById('acct-pass2') as HTMLInputElement | null)?.value) { formMsg = '兩次輸入的密碼不一致'; renderAcct(); return }
@@ -842,10 +1047,15 @@ async function submitForm() {
 
 document.addEventListener('click', (e) => {
   const t = e.target as HTMLElement
-  if (t.closest('[data-acct]')) { acctOpen = true; formMsg = ''; pwMsg = ''; pwOpen = false; renderAcct(); return }
+  if (t.closest('[data-acct]')) { acctOpen = true; formMsg = ''; pwMsg = ''; pwOpen = false; notice = ''; if (!impDocs) { impMsg = ''; impErr = false }; renderAcct(); return }
   if (!acctOpen) return
   if (t.closest('[data-acct-close]')) { acctOpen = false; renderAcct() }
-  else if (t.closest('[data-acct-mode]')) { mode = mode === 'login' ? 'register' : 'login'; formMsg = ''; if (mode === 'register') loadInviteConfig(); renderAcct() }
+  else if (t.closest('[data-acct-forgot]')) { mode = 'reset'; formMsg = ''; renderAcct() }
+  else if (t.closest('[data-acct-back]')) { mode = 'login'; formMsg = ''; renderAcct() }
+  else if (t.closest('[data-acct-imp-read]')) { if (!impBusy) void impRead() }
+  else if (t.closest('[data-acct-imp-go]')) { if (!impBusy) void impApply() }
+  else if (t.closest('[data-acct-imp-cancel]')) { if (!impBusy) { impDocs = null; impMsg = ''; impErr = false; renderAcct() } }
+  else if (t.closest('[data-acct-mode]')){ mode = mode === 'login' ? 'register' : 'login'; formMsg = ''; if (mode === 'register') loadInviteConfig(); renderAcct() }
   else if (t.closest('[data-acct-pw]')) void submitPassword()
   else if (t.closest('[data-acct-submit]')) void submitForm()
   else if (t.closest('[data-acct-sync]')) void onLogin().then(() => pushDirty())
@@ -856,7 +1066,11 @@ document.addEventListener('click', (e) => {
   else if (t.closest('[data-acct-logout]')) void client.auth.logout().then(() => { syncMsg = ''; acctOpen = false; renderAcct() }) // meta.owner 保留：下次別的帳號登入時才知道本機資料是誰的
 })
 // <details> 的 toggle 不冒泡，用捕獲階段記住展開狀態（背景同步訊息觸發重畫時才不會被收起來）
-document.addEventListener('toggle', (e) => { const t = e.target as HTMLElement; if (t.id === 'acct-pw-box') pwOpen = (t as HTMLDetailsElement).open }, true)
+document.addEventListener('toggle', (e) => {
+  const t = e.target as HTMLElement
+  if (t.id === 'acct-pw-box') pwOpen = (t as HTMLDetailsElement).open
+  else if (t.id === 'acct-imp-box') impOpen = (t as HTMLDetailsElement).open
+}, true)
 document.addEventListener('keydown', (e) => {
   if (!acctOpen) return
   if (e.key === 'Escape') { acctOpen = false; renderAcct() }
@@ -896,6 +1110,11 @@ async function boot() {
       )
     }
   }
+  // 重設密碼、匯入完成後重新載入：打開帳號視窗顯示結果
+  try {
+    const f = sessionStorage.getItem(FLASH_KEY)
+    if (f) { sessionStorage.removeItem(FLASH_KEY); notice = f; acctOpen = true }
+  } catch { /* ignore */ }
   booted = true
   uiStarted = true
   void loadDs().catch(() => {}) // 與 UI 啟動並行
