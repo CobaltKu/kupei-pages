@@ -231,7 +231,7 @@ await check('報告單篇：summary 以純文字呈現（不解析 markdown、�
 await check('報告設定：未登入按「產生報告」引導登入，不送請求', async () => {
   await go(P, '#/report-settings', 2000)
   const hist = await P.innerText('#rs-history'); must(/2026Q2 1/.test(hist) && /失敗/.test(hist) && /登入帳號後顯示/.test(hist), '歷次報告：' + hist.slice(0, 160))
-  must(/尚未提供/.test(await P.innerText('#rs-inputs')), '參考資料應顯示尚未提供')
+  must(!(await P.isVisible('#rs-infield')) && !/inputs\//.test(await P.innerText('#rs-panel')), 'Pages 不支援上傳參考資料：整欄應隱藏、不顯示內部路徑')
   M.calls.length = 0
   await P.click('[data-repgen]'); await P.waitForSelector('.acct-modal', { timeout: 5000 })
   must(/登入/.test(await P.innerText('.acct-modal h2')), '沒有打開登入視窗')
