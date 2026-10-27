@@ -175,6 +175,33 @@ export interface LatestResponse {
   quotes: Record<string, [number | null, number | null, number | null]>
 }
 
+// ── 盤中行情（K-48）──
+/** 盤中報價：[成交價(null＝今天還沒有成交), 漲跌（相對昨收）, 累計成交量（股）, 資料時間 "HH:MM:SS"] */
+export type IntradayQuote = [number | null, number | null, number | null, string | null]
+
+/** 一個市場的快照資訊；還沒有快照是 null */
+export interface IntradayMarketInfo {
+  /** 來源資料時間，ISO 8601 台灣時間（+08:00），例如 2026-10-27T10:25:00+08:00 */
+  at: string
+  /** 後端收到的時間（UTC ISO 8601） */
+  receivedAt: string
+  /** 來源，例如 twse-mis */
+  source: string
+}
+
+/** GET /api/market/intraday：外部排程盤中每 10 分鐘推一次的快照（不是即時串流） */
+export interface IntradayResponse {
+  /** 台灣時間：平日 09:00 前 PRE、09:00～13:30 OPEN、其餘（含週末）CLOSED。國定休市日不知道，看 stale */
+  phase: 'PRE' | 'OPEN' | 'CLOSED'
+  /** true＝不是今天夠新的資料（任一市場沒有快照、日期不是今天，或開盤中超過 20 分鐘沒更新）→ 顯示收盤價或標示延遲 */
+  stale: boolean
+  /** 推送頻率（秒），目前 300 */
+  ttlSeconds: number
+  markets: { L: IntradayMarketInfo | null; O: IntradayMarketInfo | null }
+  /** 代號 → 報價（上市、上櫃合併）；沒有快照時是 {} */
+  quotes: Record<string, IntradayQuote>
+}
+
 export interface Quote {
   close: number | null
   change: number | null
@@ -262,4 +289,87 @@ export interface StoredSession {
 export interface SessionInfo {
   username: string
   expiresAt: string
+}
+
+// ── 新聞與報告（/api/news、/api/reports/*；2026-10-27） ──
+
+/** GET /api/news 的一則。url 一定是 https（Google 新聞的轉址連結，打開會到原文）；title 已去掉結尾的「 - 來源」 */
+export interface NewsItem {
+  title: string
+  url: string
+  source: string
+  /** ISO 8601（UTC） */
+  publishedAt: string
+}
+
+/** GET /api/news。items 新→舊、最多 50 則。stale 為 true＝來源暫時抓不到，這是較舊的結果 */
+export interface NewsResponse {
+  items: NewsItem[]
+  fetchedAt: string
+  source: 'google-news-rss'
+  stale?: true
+}
+
+/** kupei.news() 的參數。每個字 1～50 字、不能含逗號；q 1～5 個（之間是 OR）、exclude 0～5 個（只比對標題） */
+export interface NewsQuery {
+  q: string[]
+  exclude?: string[]
+  /** 省略＝3 */
+  days?: 1 | 3 | 5
+}
+
+/** GET /api/news/sources */
+export interface NewsSource {
+  id: string
+  name: string
+  url: string
+}
+
+export type ReportStatus = 'DRAFT' | 'PUBLISHED' | 'FAILED'
+
+/** 報告附的檔案：外部 https 連結（後端不存檔案） */
+export interface ReportFile {
+  name: string
+  url: string
+}
+
+/** GET /api/reports/<code> 列表的一筆（不含 summary） */
+export interface ReportMeta {
+  /** 例如 2026Q2 */
+  period: string
+  /** 版次，正整數 */
+  rev: number
+  status: ReportStatus
+  title: string
+  /** ISO 8601（UTC） */
+  generatedAt: string
+  /** https 或 null */
+  url: string | null
+  files: ReportFile[]
+}
+
+/** GET /api/reports/<code>/<period>/<rev>：多了 summary（純文字或 markdown，可能 null） */
+export interface Report extends ReportMeta {
+  summary: string | null
+}
+
+export type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
+
+/** POST /api/reports/<code>/requests 的回應（202 新排隊；200 同一期已在排隊，回那一筆） */
+export interface ReportRequestCreated {
+  id: number
+  status: 'QUEUED'
+  createdAt: string
+}
+
+/** GET /api/reports/<code>/requests 的一筆（只有自己的） */
+export interface ReportRequest {
+  id: number
+  period: string
+  trigger: 'MANUAL'
+  status: ReportRequestStatus
+  createdAt: string
+  updatedAt: string
+  /** 管線留的說明，可能 null */
+  message: string | null
 }

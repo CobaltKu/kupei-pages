@@ -15,6 +15,8 @@
 //   8. 可選批次檔（help.json 說明頁、valuation.json 估價、node_info.json 節點完整定義）：不在 loadDataset 裡，
 //      要用時才呼叫 loadHelp()／loadValuation()／loadNodeInfo()。這個批次沒交付（manifest.hashes 沒有該鍵）→ 回 null、
 //      不打網路；有就帶 ?v=<雜湊> 抓一次，同一個批次之後直接回記憶體，換批次才重抓。內容形狀由批次交付方決定，用前自己檢查。
+//   9. 新聞與報告：news() 後端代抓 Google 新聞（瀏覽器可留 5 分鐘）；reports()／report() 讀報告 metadata（檔案只有外部連結）。
+//      requestReport()／reportRequests() 只限登入（沒登入丟 401 UNAUTHENTICATED、不打網路）；報告由外部管線產生，不要輪詢進度。
 //
 // 用法：
 //   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE, token: import.meta.env.VITE_KUPEI_TOKEN })
@@ -22,6 +24,7 @@
 //   const ds = await kupei.loadDataset({ onUpdate })     // 可能先回快取的舊批次，換批次時 onUpdate 會再給新的
 //   const latest = await kupei.marketLatest()
 //   const q = quoteOf(latest, '2330')
+//   const intra = await kupei.marketIntraday()           // 盤中快照（每 10 分鐘更新）；intra.stale 為 true 時改顯示收盤價
 //   const valuation = await kupei.loadValuation()         // 這個批次沒有估價就是 null → 不要顯示估價欄位
 //   const help = await kupei.loadHelp()                   // 說明頁；null ＝ 沒交付
 //   const nodeInfo = await kupei.loadNodeInfo()           // 節點完整定義；null ＝ 沒交付（英文名仍看 ds.nodeName）
@@ -31,6 +34,9 @@
 //   kupei.getSession()                                   // { username, expiresAt } | null，同步、不打網路
 //   await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))   // 跨裝置同步（依帳號）
 //   await kupei.auth.logout()
+//   const { items, stale } = await kupei.news({ q: ['台積電', '2330'], exclude: ['廣告'], days: 3 })
+//   const reports = await kupei.reports('2330')           // 列表（不含 summary）；kupei.report('2330', '2026Q2', 1) 含 summary
+//   await kupei.requestReport('2330', '2026Q2')           // 登入後才能送；進度看 kupei.reportRequests('2330')
 import type {
   ApiErrorBody,
   AuthConfig,
@@ -42,14 +48,22 @@ import type {
   Head,
   HelpDoc,
   History,
+  IntradayResponse,
   LatestResponse,
   Major,
   Manifest,
   MarketStatus,
+  NewsQuery,
+  NewsResponse,
+  NewsSource,
   NodeInfo,
   Quote,
   RawRow,
   RawSummary,
+  Report,
+  ReportMeta,
+  ReportRequest,
+  ReportRequestCreated,
   SessionInfo,
   StoredSession,
   Translations,
@@ -366,6 +380,8 @@ export function createKupeiClient(cfg: KupeiConfig) {
   // ── 行情：共用進行中的請求＋ 60 秒記憶體快取（和伺服器的快取時間一致） ──
   let latestCache: { at: number; value: LatestResponse } | null = null
   let latestInFlight: Promise<LatestResponse> | null = null
+  let intradayCache: { at: number; value: IntradayResponse } | null = null
+  let intradayInFlight: Promise<IntradayResponse> | null = null
 
   // ── history：同一個 tick 內的呼叫合併成一次請求（列表畫面一次要幾十家時特別有用） ──
   let pending: { codes: Set<string>; promise: Promise<void> } | null = null
@@ -507,6 +523,25 @@ export function createKupeiClient(cfg: KupeiConfig) {
       return new Map(valid.map((c) => [c, histories.get(c) ?? { quotes: [], revenue: [] }]))
     },
 
+    // ── 盤中行情（K-48）──
+    /**
+     * 盤中行情快照（上市＋上櫃合併）。後端每 10 分鐘收一次外部推送，不是即時串流：不要輪詢，
+     * 畫面打開或使用者手動重新整理時呼叫即可。60 秒內重複呼叫直接回記憶體；進行中的請求共用。
+     * stale 為 true（休市、開盤前、推送延遲）時請改顯示收盤價（marketLatest）或標示資料時間。
+     */
+    marketIntraday(): Promise<IntradayResponse> {
+      const now = Date.now()
+      if (intradayCache && now - intradayCache.at < LATEST_TTL_MS) return Promise.resolve(intradayCache.value)
+      if (intradayInFlight) return intradayInFlight
+      intradayInFlight = get<IntradayResponse>('/api/market/intraday')
+        .then((v) => {
+          intradayCache = { at: Date.now(), value: v }
+          return v
+        })
+        .finally(() => (intradayInFlight = null))
+      return intradayInFlight
+    },
+
     /** 行情資料範圍與最近抓取結果（資料新不新用） */
     marketStatus: () => get<MarketStatus>('/api/market/status', { cache: 'no-store' }),
 
@@ -594,6 +629,52 @@ export function createKupeiClient(cfg: KupeiConfig) {
         if (!liveSession()) return null
         return (await get<{ user: AuthUser }>('/api/auth/me', { cache: 'no-store' })).user
       },
+    },
+
+    // ── 新聞與報告（2026-10-27）：唯讀、寫入、登入權杖都能讀；產生請求只限登入 ──
+
+    /**
+     * 新聞（後端代抓 Google 新聞，只有標題、來源、時間、原文連結）。q 1～5 個關鍵字（之間 OR）、exclude 0～5 個排除字（只比對標題），
+     * 每個 1～50 字、不能含逗號；days 1、3、5（省略＝3）。不合法 400 BAD_REQUEST；來源抓不到且沒有舊結果 502 UPSTREAM_ERROR。
+     * 回應 stale 為 true＝來源暫時抓不到、這是較舊的結果。瀏覽器快取 5 分鐘（伺服器同一查詢 30 分鐘只抓一次）
+     */
+    news(query: NewsQuery): Promise<NewsResponse> {
+      const params = new URLSearchParams({ q: query.q.map((x) => x.trim()).join(',') })
+      if (query.exclude?.length) params.set('exclude', query.exclude.map((x) => x.trim()).join(','))
+      if (query.days !== undefined) params.set('days', String(query.days))
+      return get<NewsResponse>(`/api/news?${params}`)
+    },
+
+    /** 新聞來源清單（目前只有 Google 新聞） */
+    newsSources: async () => (await get<{ sources: NewsSource[] }>('/api/news/sources')).sources,
+
+    /** 一家公司的報告（不含 summary）：period 新→舊、同期 rev 新→舊。所有狀態（DRAFT／PUBLISHED／FAILED）都會列出 */
+    reports: async (code: string) => (await get<{ reports: ReportMeta[] }>(`/api/reports/${encodeURIComponent(code)}`, { cache: 'no-store' })).reports,
+
+    /** 單一份報告（含 summary）。沒有這份丟 KupeiError 404 NOT_FOUND */
+    report: (code: string, period: string, rev: number) =>
+      get<Report>(`/api/reports/${encodeURIComponent(code)}/${encodeURIComponent(period)}/${rev}`, { cache: 'no-store' }),
+
+    /**
+     * 送出「產生報告」請求（要登入；沒登入丟 401 UNAUTHENTICATED、不打網路）。同一期已在排隊就回那一筆。
+     * 每個帳號最多 20 筆排隊中，超過 403 QUOTA_EXCEEDED（details: { queued, maxQueued }）。報告由外部管線產生，完成時間不固定
+     */
+    async requestReport(code: string, period: string): Promise<ReportRequestCreated> {
+      const s = liveSession()
+      if (!s) throw new KupeiError(401, 'UNAUTHENTICATED', '還沒登入', null)
+      return get<ReportRequestCreated>(`/api/reports/${encodeURIComponent(code)}/requests`, {
+        method: 'POST',
+        body: { period, trigger: 'MANUAL' },
+        cache: 'no-store',
+        token: s.token,
+      })
+    },
+
+    /** 自己在這家公司的產生請求（新→舊；要登入，沒登入丟 401、不打網路）。不要輪詢，回到頁面或手動重新整理時再查 */
+    async reportRequests(code: string): Promise<ReportRequest[]> {
+      const s = liveSession()
+      if (!s) throw new KupeiError(401, 'UNAUTHENTICATED', '還沒登入', null)
+      return (await get<{ requests: ReportRequest[] }>(`/api/reports/${encodeURIComponent(code)}/requests`, { cache: 'no-store', token: s.token })).requests
     },
 
     store: {
