@@ -8,7 +8,11 @@ const BUILD = process.env.GITHUB_SHA?.slice(0, 7) ?? Date.now().toString(36)
 
 export default defineConfig({
   base: process.env.PAGES_BASE ?? '/',
-  define: { __BUILD__: JSON.stringify(BUILD) },
+  define: {
+    __BUILD__: JSON.stringify(BUILD),
+    // 登入閘門（2026-10-28）：網站必須登入，建置一律不帶唯讀權杖。就算環境裡還有 VITE_KUPEI_TOKEN，也換成空字串、不進 JS
+    'import.meta.env.VITE_KUPEI_TOKEN': '""',
+  },
   // define 只作用在 JS；index.html 裡的 __BUILD__ 在這裡換掉
   plugins: [{ name: 'kupei-build-id', transformIndexHtml: (html) => html.replaceAll('__BUILD__', BUILD) }],
 })

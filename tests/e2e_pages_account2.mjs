@@ -1,8 +1,9 @@
-// 帳號視窗（二）：忘記密碼（POST /api/auth/reset）與「匯入舊的寫入權杖資料」。全部用假的帳號與雲端文件端點，不建立真實帳號。
-// BASE=http://127.0.0.1:5395/ ENVFILE=<含 VITE_KUPEI_TOKEN 的檔> node e2e_pages_account2.mjs（SHOTS=<資料夾> 另存截圖）
+// 帳號（二）：忘記密碼（POST /api/auth/reset，在登入畫面）與「匯入舊的寫入權杖資料」（已登入的帳號視窗）。
+// 全部用假的帳號與雲端文件端點，不建立真實帳號；資料用 fixture（或 KUPEI_TEST_SESSION 讀線上），見 tests/_kupei_test.mjs。
+// BASE=http://127.0.0.1:5395/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_account2.mjs（SHOTS=<資料夾> 另存截圖）
 import { chromium } from 'playwright'
 import fs from 'node:fs'
-const ENV = Object.fromEntries(fs.readFileSync(process.env.ENVFILE, 'utf8').split('\n').map((l) => l.replace('\r', '')).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
+import { routeBackend, seedSession } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const SHOTS = process.env.SHOTS || ''
 if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true })
@@ -22,7 +23,7 @@ const storeOf = (u) => { if (!stores.has(u)) stores.set(u, new Map()); return st
 const authCalls = [], log = [], urls = []
 let codeUsed = false, raceOnce = false, quota = false
 async function mock(ctx) {
-  await ctx.route(/\/(data|api\/market)\//, (route) => route.request().method() === 'OPTIONS' ? route.continue() : route.continue({ headers: { ...route.request().headers(), authorization: 'Bearer ' + ENV.VITE_KUPEI_TOKEN } }))
+  await routeBackend(ctx)
   await ctx.route('**/api/auth/**', async (route) => {
     const r = route.request(), path = new URL(r.url()).pathname
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
@@ -71,32 +72,33 @@ async function mock(ctx) {
     return route.fulfill({ status: 200, headers: CORS, body: JSON.stringify({ ok: true }) })
   })
 }
-async function device(width = 1440) {
+/** user：放一個已登入的 session；不給＝停在登入畫面 */
+async function device(width = 1440, user = null) {
   const ctx = await b.newContext({ viewport: { width, height: 900 } })
   await mock(ctx)
+  if (user) await seedSession(ctx, user)
   const p = await ctx.newPage()
-  await p.route('**/fonts.g*/**', (r) => r.abort())
   p.on('pageerror', (e) => errs.push('JS 錯誤：' + e.message))
   p.on('request', (r) => urls.push(r.url()))
   p.on('console', (m) => { const t = m.text(); if (t.includes(OLD_TOKEN) || t.includes(EMPTY_TOKEN)) errs.push('console 印出權杖') })
   await p.goto(BASE)
-  if (width > 760) await ready(p); else await p.waitForSelector('[data-acct]', { state: 'visible', timeout: 40000 })
+  if (!user) await p.waitForSelector('#kp-gate #acct-user', { timeout: 20000 })
+  else if (width > 760) await ready(p); else await p.waitForSelector('[data-acct]', { state: 'visible', timeout: 40000 })
   return p
 }
 const ready = (p) => p.waitForFunction(() => document.querySelectorAll('#h-body tr').length > 100, null, { timeout: 40000 })
 const openAcct = async (p) => { await p.click('[data-acct]'); await p.waitForSelector('.acct-modal') }
 const errText = (p) => p.textContent('#acct-err')
-const shot = async (p, name) => { if (SHOTS) await p.locator('.acct-modal').screenshot({ path: `${SHOTS}/${name}.png` }) }
+const shot = async (p, name) => { if (SHOTS) await p.locator('.acct-modal, #kp-gate .gate-card').screenshot({ path: `${SHOTS}/${name}.png` }) }
 const resetCalls = () => authCalls.filter((c) => c.path.endsWith('/reset'))
 
 /* ---------------- 忘記密碼 ---------------- */
 const R = await device()
 await check('忘記密碼：登入畫面有連結，切到重設表單（四個欄位、說明），可返回登入', async () => {
-  await openAcct(R)
   await R.click('[data-acct-forgot]'); await R.waitForSelector('#acct-code')
   for (const id of ['#acct-user', '#acct-code', '#acct-rpass', '#acct-rpass2']) must(await R.$(id), '缺欄位 ' + id)
-  const txt = await R.textContent('.acct-modal')
-  must(txt.includes('向管理員索取重設碼') && txt.includes('24 小時') && txt.includes('只能用一次'), '說明文字不對')
+  const txt = await R.textContent('#kp-gate')
+  must(txt.includes('向站長索取重設碼') && txt.includes('24 小時') && txt.includes('只能用一次'), '說明文字不對')
   must(!(await R.$('#acct-wt')), '重設表單不該有寫入權杖欄位')
   await shot(R, 'reset-form')
   await R.fill('#acct-user', 'T-User')
@@ -144,11 +146,11 @@ await check('忘記密碼：成功 → 已登入、localStorage session 換新�
 await R.context().close()
 
 /* ---------------- 匯入舊的寫入權杖資料 ---------------- */
-const A = await device()
+const A = await device(1440, 't-imp')
 const watchOf = (p) => p.evaluate(() => localStorage.getItem('kupei3_watch'))
 const ids = (v) => { try { return JSON.parse(v).groups.flatMap((g) => g.ids) } catch { return null } }
 let OLD_WATCH = '', MINE = ''
-await check('匯入：準備（本機已有自選、登入帳號 t-imp，雲端已有一份）', async () => {
+await check('匯入：準備（已登入帳號 t-imp、加一家自選，雲端已有一份）', async () => {
   await A.click('#h-body tr:nth-child(2) [data-menu]'); await A.click('.menu [data-setg]'); await A.waitForTimeout(600)
   MINE = await watchOf(A); must(ids(MINE)?.length === 1, '本機自選 ' + MINE)
   const tmpl = JSON.parse(MINE); tmpl.groups.forEach((g, i) => (g.ids = i === 0 ? ['1101', '1102', '1103'] : []))
@@ -158,9 +160,8 @@ await check('匯入：準備（本機已有自選、登入帳號 t-imp，雲端�
   old.set('ui-news', { version: 2, updatedAt: '2026-10-21T01:00:00.000Z', data: { savedAt: '', value: JSON.stringify({ span: 3, groups: [], stock: {}, disabled: [] }) } })
   old.set('legacy-other', { version: 1, updatedAt: null, data: { x: 1 } })
   storeOf('empty').set('something-else', { version: 1, updatedAt: null, data: { x: 1 } })
-  await openAcct(A); await A.fill('#acct-user', 't-imp'); await A.fill('#acct-pass', 'password-123'); await A.click('[data-acct-submit]')
-  await A.waitForFunction(() => /已登入/.test(document.querySelector('.acct-modal')?.textContent || ''), null, { timeout: 15000 })
   await sleep(2500)
+  await openAcct(A)
   must(storeOf('t-imp').get('ui-watch')?.version === 1, '帳號雲端 ' + JSON.stringify(storeOf('t-imp').get('ui-watch')?.version))
 })
 const impBox = async () => { await A.evaluate(() => { const d = document.getElementById('acct-imp-box'); if (d) d.open = true }); await A.waitForSelector('#acct-imp-wt') }
@@ -228,8 +229,8 @@ await check('權杖不進網址、不存 localStorage／sessionStorage', async (
 })
 const M = await device(390)
 await check('手機寬度：重設表單不超出畫面', async () => {
-  await openAcct(M); await M.click('[data-acct-forgot]'); await M.waitForSelector('#acct-code')
-  const box = await M.locator('.acct-modal').boundingBox(); must(box.x >= 0 && box.x + box.width <= 390, '重設表單 ' + JSON.stringify(box))
+  await M.click('[data-acct-forgot]'); await M.waitForSelector('#acct-code')
+  const box = await M.locator('#kp-gate .gate-card').boundingBox(); must(box.x >= 0 && box.x + box.width <= 390, '重設表單 ' + JSON.stringify(box))
   await shot(M, 'reset-form-390')
 })
 await M.context().close()

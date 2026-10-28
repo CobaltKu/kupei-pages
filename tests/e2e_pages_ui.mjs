@@ -1,8 +1,8 @@
-// 畫面修正的回歸測試（2026-10-28 線上實測找到的 bug）。評分與收盤行情用線上資料，盤中端點用假的回應；不寫入任何資料、不建立帳號。
-// BASE=http://127.0.0.1:5433/（無權杖版建置）ENVFILE=<含 VITE_KUPEI_TOKEN 的檔> node e2e_pages_ui.mjs（SHOTS=<資料夾> 另存截圖）
+// 畫面修正的回歸測試（2026-10-28 線上實測找到的 bug）。盤中端點用假的回應；不寫入任何資料、不建立帳號。
+// 網站必須登入（2026-10-28）：假的已登入 session＋fixture 資料（或 KUPEI_TEST_SESSION 讀線上），見 tests/_kupei_test.mjs。
+// BASE=http://127.0.0.1:5433/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_ui.mjs（SHOTS=<資料夾> 另存截圖）
 import { chromium } from 'playwright'
-import fs from 'node:fs'
-const ENV = Object.fromEntries(fs.readFileSync(process.env.ENVFILE, 'utf8').split('\n').map((l) => l.replace('\r', '')).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
+import { routeBackend, seedSession, MIN_ROWS } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const SHOTS = process.env.SHOTS || ''
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
@@ -16,9 +16,9 @@ const M = { intraday: CLOSED }
 
 async function open(hash = '', vp = { width: 1440, height: 900 }, clock = false) {
   const ctx = await b.newContext({ viewport: vp })
-  await ctx.route(/\/(data\/|api\/market\/(latest|history))/, (route) => route.request().method() === 'OPTIONS' ? route.continue() : route.continue({ headers: { ...route.request().headers(), authorization: 'Bearer ' + ENV.VITE_KUPEI_TOKEN } }))
+  await routeBackend(ctx); await seedSession(ctx)
   await ctx.route(/\/api\/market\/intraday/, (route) => route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: CORS }) : route.fulfill({ status: 200, headers: CORS, body: JSON.stringify(M.intraday) }))
-  await ctx.route(/\/api\/(news|reports|auth|store)/, (route) => route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: CORS }) : route.fulfill({ status: 404, headers: CORS, body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'NOT_FOUND' } }) }))
+  await ctx.route(/\/api\/(news|reports)/, (route) => route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: CORS }) : route.fulfill({ status: 404, headers: CORS, body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'NOT_FOUND' } }) }))
   const p = await ctx.newPage()
   if (clock) await p.clock.install()
   await p.route('**/fonts.g*/**', (r) => r.abort())
@@ -117,7 +117,7 @@ await check('估價卡：旗標不重複、數值完整（桌機與 390 手機�
 /* 8. 搜尋多筆相符：提示筆數；完全相符的代號直接跳、不提示 */
 await check('搜尋：多筆相符顯示「找到 N 筆」，代號完全相符直接跳', async () => {
   const p = await open('')
-  await p.waitForFunction(() => document.querySelectorAll('#h-body tr').length >= 1900, null, { timeout: 40000 })
+  await p.waitForFunction((n) => document.querySelectorAll('#h-body tr').length >= n, MIN_ROWS, { timeout: 40000 })
   await p.fill('#h-q', '台'); await p.press('#h-q', 'Enter'); await p.waitForTimeout(1200)
   const msg = await p.innerText('#h-msg'); must(/找到 \d+ 筆，已跳到第一筆/.test(msg), '訊息：' + msg)
   const flash = await p.$eval('#h-body tr.flash', (x) => x.id).catch(() => ''); must(flash, '沒有標示跳到的列')
@@ -146,7 +146,8 @@ await check('狀態頁、說明頁、報告與新聞設定：不顯示內部備�
   const ns = await p.innerText('#ns-store'); must(/Google／Bing 新聞/.test(ns), '新聞設定來源：' + ns)
   await go(p, '#/watch', 800)
   await p.click('[data-gmenu="1"]'); await p.click('[data-gdel="1"]')
-  const cf = await p.innerText('.modal'); must(/只存在這台瀏覽器/.test(cf) && !/保存在後端/.test(cf), '刪除確認：' + cf)
+  // 網站必須登入：一定是「同步到你的帳號」（2026-10-28 前未登入時是「只存在這台瀏覽器」）
+  const cf = await p.innerText('.modal'); must(/同步到你的帳號/.test(cf) && !/保存在後端/.test(cf), '刪除確認：' + cf)
   await p.context().close(); return ''
 })
 

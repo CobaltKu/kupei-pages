@@ -1,10 +1,10 @@
 // 資料橋接修正（2026-10-28）：估價不擋首頁、新聞停用來源依媒體名稱、休市日不把前一天快照當盤中價、個股頁延遲載入與快取、
 // 報告請求 id、新欄位結構驗證、summary.json 只讀一次、FinMind 來源標示。
-// 評分與收盤行情用線上資料（部分測試在回應上改欄位）；盤中、新聞、報告、帳號全部用假的回應。不建立真實帳號。
-// BASE=http://127.0.0.1:5442/（無權杖版建置）ENVFILE=<含 VITE_KUPEI_TOKEN 的檔> node e2e_pages_wiring.mjs
+// 評分與收盤行情用 fixture（或 KUPEI_TEST_SESSION 讀線上；部分測試在回應上改欄位）；盤中、新聞、報告、帳號全部用假的回應。不建立真實帳號。
+// 網站必須登入（2026-10-28）：每個裝置都放假的已登入 session（kps_mock_1）。見 tests/_kupei_test.mjs。
+// BASE=http://127.0.0.1:5442/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_wiring.mjs
 import { chromium } from 'playwright'
-import fs from 'node:fs'
-const ENV = Object.fromEntries(fs.readFileSync(process.env.ENVFILE, 'utf8').split('\n').map((l) => l.replace('\r', '')).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
+import { routeBackend, resolveData } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
 const results = [], errs = []
@@ -50,18 +50,16 @@ async function mockApi(route) {
   if ((m = path.match(/^\/api\/reports\/(\d{4})\/([^/]+)\/([^/]+)$/))) return json(200, { period: m[2], rev: +m[3], status: 'PUBLISHED', title: 't', generatedAt: '2026-10-20T03:00:00Z', url: null, files: [], summary: '摘要' })
   return json(404, { error: { code: 'NOT_FOUND', message: 'x' } })
 }
-/** 線上資料（帶唯讀權杖，只在記憶體）；summary／valuation／latest 可改內容或延遲 */
+/** 評分與收盤資料（fixture 或 KUPEI_TEST_SESSION 讀線上）；summary／valuation／latest 可改內容或延遲 */
 async function live(route) {
   const r = route.request()
-  if (r.method() === 'OPTIONS') return route.continue()
+  if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
   const url = r.url()
   M.calls.push({ method: r.method(), path: new URL(url).pathname, t: Date.now() })
-  const headers = { ...r.headers(), authorization: 'Bearer ' + ENV.VITE_KUPEI_TOKEN }
   const isVal = /\/valuation\.json/.test(url), isSum = /\/summary\.json/.test(url), isLatest = /\/api\/market\/latest/.test(url)
-  if (!(isVal && (M.valDelay || M.valMut)) && !(isSum && M.summaryMut) && !(isLatest && M.latestMut)) return route.continue({ headers })
-  const res = await route.fetch({ headers })
-  let body = await res.text()
-  if (res.ok()) {
+  const res = await resolveData(route)
+  let body = res.body
+  if (res.status === 200 && ((isSum && M.summaryMut) || (isVal && M.valMut) || (isLatest && M.latestMut))) {
     const j = JSON.parse(body)
     if (isSum && M.summaryMut) M.summaryMut(j)
     if (isVal && M.valMut) M.valMut(j)
@@ -70,8 +68,7 @@ async function live(route) {
   }
   if (isVal && M.valDelay) await sleep(M.valDelay)
   if (isVal) M.valArrived = Date.now()
-  const h = { ...res.headers() }; delete h['content-encoding']; delete h['content-length']; delete h.etag
-  return route.fulfill({ status: res.status(), headers: h, body })
+  return route.fulfill({ status: res.status, headers: { ...CORS, 'content-type': res.ct }, body })
 }
 
 const SEED = {
@@ -81,6 +78,8 @@ const SEED = {
 const LOGIN = { 'kupei:session': JSON.stringify({ token: 'kps_mock_1', username: 't-user', expiresAt: new Date(Date.now() + 864e5).toISOString() }) }
 async function open(hash = '', seed = SEED, wait = true) {
   const ctx = await b.newContext({ viewport: { width: 1280, height: 900 } })
+  await routeBackend(ctx)
+  seed = { ...LOGIN, ...seed } // 網站必須登入：一律帶 session
   await ctx.addInitScript((data) => { if (!sessionStorage.getItem('seeded')) { for (const k in data) localStorage.setItem(k, data[k]); sessionStorage.setItem('seeded', '1') } }, seed)
   await ctx.route(/\/(data\/|api\/market\/(latest|history))/, live)
   await ctx.route(/\/api\/(market\/intraday|news|reports)/, mockApi)

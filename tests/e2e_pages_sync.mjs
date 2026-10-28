@@ -1,9 +1,10 @@
 // 雲端同步邏輯測試：用假的帳號與雲端文件端點（不建立真實帳號、不碰線上資料）。
-// 評分與行情仍讀線上 Workers。BASE=http://127.0.0.1:5173/ node e2e_pages_sync.mjs
+// 評分與行情用 fixture（或 KUPEI_TEST_SESSION 讀線上），見 tests/_kupei_test.mjs。
+// 網站必須登入（2026-10-28）：登入一律在登入畫面；沒登入不能改自選，「首次登入上傳本機資料」改用預先放在本機的資料模擬；
+// 只有寫入權杖、沒登入帳號時不同步（停在登入畫面）。
+// BASE=http://127.0.0.1:5173/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_sync.mjs
 import { chromium } from 'playwright'
-import fs from 'node:fs'
-// 假權杖打不進線上資料端點（會被判 401 而清掉登入），所以資料請求改帶 KuPei 本機的唯讀權杖（只在記憶體中使用，不輸出）
-const ENV = Object.fromEntries(fs.readFileSync(process.env.ENVFILE, 'utf8').split(String.fromCharCode(10)).map((l) => l.replace(String.fromCharCode(13), '')).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
+import { routeBackend, gateLogin } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
 const results = [], errs = []
@@ -19,7 +20,7 @@ const log = []
 let delayWatchMs = 0 // >0：下一次 GET ui-watch 延遲這麼久（模擬啟動時同步逾時）
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS', 'content-type': 'application/json' }
 async function mock(ctx) {
-  await ctx.route(/\/(data|api\/market)\//, (route) => route.request().method() === 'OPTIONS' ? route.continue() : route.continue({ headers: { ...route.request().headers(), authorization: 'Bearer ' + ENV.VITE_KUPEI_TOKEN } }))
+  await routeBackend(ctx)
   await ctx.route('**/api/auth/**', async (route) => {
     const r = route.request()
     if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
@@ -49,22 +50,29 @@ async function mock(ctx) {
     return route.fulfill({ status: 200, headers: CORS, body: JSON.stringify({ ok: true }) })
   })
 }
-async function device() {
+const storeCalls = []
+async function device(seed) {
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } })
   await mock(ctx)
+  if (seed) await ctx.addInitScript((data) => { if (location.protocol.startsWith('http') && !sessionStorage.getItem('seeded')) { for (const k in data) localStorage.setItem(k, data[k]); sessionStorage.setItem('seeded', '1') } }, seed)
   const p = await ctx.newPage()
-  await p.route('**/fonts.g*/**', (r) => r.abort())
   p.on('pageerror', (e) => errs.push('JS 錯誤：' + e.message))
+  p.on('request', (r) => { if (/\/api\/store/.test(r.url()) && r.method() !== 'OPTIONS') storeCalls.push(r.method() + ' ' + new URL(r.url()).pathname) })
   return p
 }
+const WATCH = (ids) => JSON.stringify({ groups: [{ id: 1, name: '自選1', ids }], cur: 1 })
 const ready = (p) => p.waitForFunction(() => document.querySelectorAll('#h-body tr').length > 100, null, { timeout: 40000 })
 async function addStar(p, n) {
   await p.goto(BASE); await ready(p)
   await p.click(`#h-body tr:nth-child(${n}) [data-menu]`); await p.click('.menu [data-setg]'); await p.waitForTimeout(600)
 }
+/** 在登入畫面登入，等首頁載入 */
 async function login(p, user = 't-user') {
-  await p.click('[data-acct]'); await p.waitForSelector('#acct-user')
-  await p.fill('#acct-user', user); await p.fill('#acct-pass', 'password-123'); await p.click('[data-acct-submit]')
+  if (!(await p.$('#kp-gate'))) await p.goto(BASE)
+  await gateLogin(p, user); await ready(p)
+}
+async function logout(p) {
+  await p.click('[data-acct]'); await Promise.all([p.waitForEvent('load'), p.click('[data-acct-logout]')]); await p.waitForSelector('#kp-gate')
 }
 const metaOf = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('kupei3_sync') || 'null'))
 const prevIds = (p) => p.evaluate(() => { try { return JSON.parse(localStorage.getItem('kupei3_watch_prev')).groups.flatMap((g) => g.ids) } catch { return null } })
@@ -72,20 +80,18 @@ const cloudIds = (u) => { const d = storeOf(u).get('ui-watch'); return d && d.da
 const star = async (p, n) => { await p.click(`#h-body tr:nth-child(${n}) [data-menu]`); await p.click('.menu [data-setg]') }
 const watchIds = (p) => p.evaluate(() => { try { return JSON.parse(localStorage.getItem('kupei3_watch')).groups.flatMap((g) => g.ids) } catch { return null } })
 
-const A = await device()
-await check('裝置 A：先加自選，再首次登入 → 雲端是空的，本機資料帶上去', async () => {
-  await addStar(A, 2); const ids = await watchIds(A); must(ids?.length === 1, '本機自選 ' + JSON.stringify(ids))
-  await login(A); await A.waitForFunction(() => !document.getElementById('acct-host') || /已登入/.test(document.getElementById('acct-host').innerText), null, { timeout: 15000 })
-  await sleep(2500)
+const A = await device({ kupei3_watch: WATCH(['1101']) })
+await check('裝置 A：本機已有自選（閘門上線前存的），首次登入 → 雲端是空的，本機資料帶上去', async () => {
+  await A.goto(BASE); await A.waitForSelector('#kp-gate')
+  await login(A); await sleep(1500)
   const doc = store.get('ui-watch'); must(doc && doc.version === 1, '雲端 ui-watch：' + JSON.stringify(doc && doc.version))
   must(JSON.parse(doc.data.value).groups[0].ids.length === 1, '雲端內容不對')
+  const ids = await watchIds(A); must(ids?.length === 1, '本機自選 ' + JSON.stringify(ids))
   return log.join('；')
 })
 const B = await device()
 await check('裝置 B：登入 → 載入 A 的自選', async () => {
-  await B.goto(BASE); await ready(B)
-  await login(B); await B.waitForFunction(() => document.querySelectorAll('#h-body tr').length > 100, null, { timeout: 30000 }).catch(() => {})
-  await B.waitForTimeout(3500); await ready(B)
+  await B.goto(BASE); await login(B); await B.waitForTimeout(1500)
   const ids = await watchIds(B); must(ids && ids.length === 1, 'B 的自選 ' + JSON.stringify(ids)); return ids.join(',')
 })
 await check('裝置 B：再加一家 → 雲端版本 2', async () => {
@@ -106,26 +112,26 @@ await check('版本衝突：A 與 B 同時改，後寫入者載入雲端並保�
   const conflict = await A.evaluate(() => localStorage.getItem('kupei3_watch_conflict')); must(conflict, 'A 沒有保留本機副本')
   const ids = await watchIds(A); must(ids && ids.length === 3, 'A 載入雲端後的自選 ' + JSON.stringify(ids)); return ids.join(',')
 })
-await check('舊寫入權杖相容：貼上後載入雲端自選', async () => {
-  const C = await device(); await C.goto(BASE); await ready(C)
-  await C.click('[data-acct]'); await C.waitForSelector('#acct-wt', { state: 'attached' }); await C.evaluate(() => { document.querySelector('.acct-adv').open = true })
-  await C.fill('#acct-wt', 'wt-mock'); await C.click('[data-acct-wt-save]')
-  await C.waitForTimeout(3500); await ready(C)
-  const ids = await watchIds(C); must(ids && ids.length === 3, 'C 的自選 ' + JSON.stringify(ids)); return ids.join(',')
+await check('只有舊寫入權杖、沒登入帳號：停在登入畫面，不讀也不寫雲端文件', async () => {
+  const n = storeCalls.length
+  const C = await device({ 'kupei:write-token': 'wt-mock' }); await C.goto(BASE); await C.waitForSelector('#kp-gate #acct-user'); await sleep(2500)
+  must(storeCalls.length === n, '請求了雲端文件：' + storeCalls.slice(n).join('、'))
+  must(!(await C.$('#h-body tr')), '畫出了資料')
+  await C.context().close()
 })
-await check('登出後資料保留在本機、不再同步', async () => {
-  await A.click('[data-acct]'); await A.click('[data-acct-logout]'); await A.waitForTimeout(800)
+await check('登出：回到登入畫面、資料保留在本機、不再同步', async () => {
+  const before = store.get('ui-watch').version, n = storeCalls.length
+  await logout(A); await sleep(2500)
   const ids = await watchIds(A); must(ids && ids.length === 3, '登出後本機自選 ' + JSON.stringify(ids))
-  const before = store.get('ui-watch').version
-  await A.goto(BASE); await ready(A); await A.click('#h-body tr:nth-child(6) [data-menu]'); await A.click('.menu [data-setg]'); await A.waitForTimeout(2800)
-  must(store.get('ui-watch').version === before, '登出後仍有寫入雲端'); return ''
+  must(store.get('ui-watch').version === before, '登出後仍有寫入雲端')
+  must(!storeCalls.slice(n).some((c) => /^(GET|PUT)/.test(c)), '登出後還有雲端文件請求：' + storeCalls.slice(n).join('、')); return ''
 })
 await check('換帳號：A 登出後 u-other（雲端空）登入 → 不上傳 A 的自選，本機改用雲端並備份到 _prev', async () => {
-  const mine = await watchIds(A); must(mine && mine.length === 4, '登出前本機自選 ' + JSON.stringify(mine))
-  await login(A, 'u-other'); await A.waitForTimeout(4000); await ready(A); await A.waitForTimeout(2500)
+  const mine = await watchIds(A); must(mine && mine.length === 3, '登出前本機自選 ' + JSON.stringify(mine))
+  await login(A, 'u-other'); await A.waitForTimeout(2500)
   const cloud = cloudIds('u-other'); must(!cloud || cloud.length === 0, 'u-other 雲端混入 A 的自選 ' + JSON.stringify(cloud))
   const ids = await watchIds(A); must(!ids || ids.length === 0, 'A 本機仍是舊帳號的自選 ' + JSON.stringify(ids))
-  const prev = await prevIds(A); must(prev && prev.length === 4, '_prev 備份 ' + JSON.stringify(prev))
+  const prev = await prevIds(A); must(prev && prev.length === 3, '_prev 備份 ' + JSON.stringify(prev))
   const m = await metaOf(A); must(m.owner === 'u-other', 'owner ' + m.owner)
   must(store.get('ui-watch').data && JSON.parse(store.get('ui-watch').data.value).groups.flatMap((g) => g.ids).length === 3, 't-user 雲端被改到')
   return 'u-other 雲端 ' + JSON.stringify(cloud)
@@ -133,14 +139,13 @@ await check('換帳號：A 登出後 u-other（雲端空）登入 → 不上傳 
 await check('換帳號：雲端版本號巧合相同也不蓋掉 u-third 的資料', async () => {
   await A.goto(BASE); await ready(A); await star(A, 7); await A.waitForTimeout(2800)
   const v = (await metaOf(A)).versions['ui-watch']; must(v >= 1, 'u-other 版本 ' + v)
-  await A.click('[data-acct]'); await A.click('[data-acct-logout]'); await A.waitForTimeout(800)
-  await A.goto(BASE); await ready(A); await star(A, 8); await A.waitForTimeout(800)
+  await logout(A)
   const mine = await watchIds(A)
   const tmpl = JSON.parse(await A.evaluate(() => localStorage.getItem('kupei3_watch')))
   tmpl.groups.forEach((g, i) => (g.ids = i === 0 ? ['1101', '1102', '1103'] : []))
   storeOf('u-third').set('ui-watch', { version: v, updatedAt: new Date().toISOString(), data: { savedAt: '', value: JSON.stringify(tmpl) } })
   const puts = log.length
-  await login(A, 'u-third'); await A.waitForTimeout(4000); await ready(A); await A.waitForTimeout(2500)
+  await login(A, 'u-third'); await A.waitForTimeout(2500)
   const ids = await watchIds(A); must(JSON.stringify(ids) === JSON.stringify(['1101', '1102', '1103']), 'A 本機 ' + JSON.stringify(ids))
   must(storeOf('u-third').get('ui-watch').version === v, 'u-third 雲端被寫入：' + log.slice(puts).join('；'))
   must(JSON.stringify(await prevIds(A)) === JSON.stringify(mine), '_prev 不是換帳號前的本機資料')

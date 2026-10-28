@@ -1,13 +1,16 @@
-// Pages 版完整 UI 的瀏覽器測試（對線上 Workers 資料）。BASE=http://127.0.0.1:5173/ node e2e_pages.mjs
+// Pages 版完整 UI 的瀏覽器測試。網站必須登入（2026-10-28）：假的已登入 session＋fixture 資料，或設 KUPEI_TEST_SESSION 對線上資料跑。
+// BASE=http://127.0.0.1:5173/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages.mjs（見 tests/_kupei_test.mjs）
 import { chromium } from 'playwright'
+import { routeBackend, seedSession, MIN_ROWS } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
 const results = [], errs = []
 const check = async (name, fn) => { try { const n = await fn(); results.push(['PASS', name, n || '']) } catch (e) { results.push(['FAIL', name, e.message.split('\n')[0]]) } }
 const must = (c, m) => { if (!c) throw new Error(m) }
 async function page(vp) {
-  const p = await (await b.newContext({ viewport: vp || { width: 1440, height: 900 } })).newPage()
-  await p.route('**/fonts.g*/**', r => r.abort())
+  const ctx = await b.newContext({ viewport: vp || { width: 1440, height: 900 } })
+  await routeBackend(ctx); await seedSession(ctx)
+  const p = await ctx.newPage()
   p.on('pageerror', e => errs.push('JS 錯誤：' + e.message))
   p.on('console', m => { if (m.type() === 'error' && !/fonts|favicon|Failed to load resource/.test(m.text())) errs.push('console：' + m.text().slice(0, 160)) })
   return p
@@ -16,8 +19,8 @@ const p = await page()
 await p.goto(BASE)
 await p.waitForFunction(() => document.querySelectorAll('#h-body tr').length > 100, null, { timeout: 40000 })
 await check('首頁載入並列出公司', async () => {
-  await p.waitForFunction(() => document.querySelectorAll('#h-body tr').length >= 1900, null, { timeout: 40000 })
-  const n = await p.$$eval('#h-body tr', x => x.length); must(n >= 1900, '列數 ' + n); return n + ' 列'
+  await p.waitForFunction((min) => document.querySelectorAll('#h-body tr').length >= min, MIN_ROWS, { timeout: 40000 })
+  const n = await p.$$eval('#h-body tr', x => x.length); must(n >= MIN_ROWS, '列數 ' + n); return n + ' 列'
 })
 await check('首頁基準列與行情', async () => {
   const t = await p.innerText('.meta'); must(/資料計算 V/.test(t), '基準列：' + t.slice(0, 80))
@@ -70,21 +73,16 @@ await check('狀態頁：版本、行情、儲存位置', async () => {
 await check('新聞頁接上後端（不再顯示後端未承接）', async () => {
   await p.goto(BASE + '#/news'); await p.waitForTimeout(1500); const t = await p.innerText('#pg-news'); must(!/後端未承接|新聞擷取功能尚未提供/.test(t) && !/undefined|NaN/.test(t), t.slice(0, 120)); return ''
 })
-await check('帳號視窗：開啟、切換註冊、錯誤帳號被拒（不建立帳號）', async () => {
-  await p.goto(BASE); await p.waitForTimeout(1500); await p.click('[data-acct]'); await p.waitForSelector('#acct-user')
-  await p.fill('#acct-user', 'e2e-not-a-user-' + Date.now().toString(36)); await p.fill('#acct-pass', 'wrong-password-123'); await p.click('[data-acct-submit]')
-  await p.waitForFunction(() => /不正確|失敗|無法連線|嘗試/.test(document.getElementById('acct-err')?.textContent || ''), null, { timeout: 15000 })
-  const msg = await p.innerText('#acct-err'); await p.click('[data-acct-mode]')
-  must(/建立帳號/.test(await p.innerText('.acct-modal h2')), '沒有切到註冊')
-  must(await p.$('#acct-pass2'), '註冊沒有再輸入一次密碼的欄位')
-  await p.fill('#acct-user', 'someone'); await p.fill('#acct-pass', 'password-123'); await p.fill('#acct-pass2', 'password-124'); await p.click('[data-acct-submit]')
-  must(/不一致/.test(await p.innerText('#acct-err')), '兩次密碼不一致沒有提示')
-  must(await p.$('#acct-wt'), '沒有寫入權杖相容區')
-  await p.keyboard.press('Escape'); must(!(await p.$('#acct-host')), '視窗沒關'); return msg
+await check('帳號視窗：已登入、可登出與改密碼、沒有註冊；Esc 關閉', async () => {
+  await p.goto(BASE); await p.waitForTimeout(1500); await p.click('[data-acct]'); await p.waitForSelector('.acct-modal')
+  const t = await p.innerText('.acct-modal')
+  must(/已登入/.test(t) && await p.$('[data-acct-logout]') && await p.$('#acct-pw-box'), '帳號視窗：' + t.slice(0, 120))
+  must(!/建立帳號|邀請碼/.test(t) && !(await p.$('[data-acct-mode], #acct-wt')), '還有註冊或寫入權杖登入')
+  await p.keyboard.press('Escape'); must(!(await p.$('#acct-host')), '視窗沒關'); return ''
 })
 await check('手機寬度：首頁與底部工作列', async () => {
   const m = await page({ width: 390, height: 844 }); await m.goto(BASE)
-  await m.waitForFunction(() => document.querySelectorAll('#h-mlist .mrow').length > 100, null, { timeout: 40000 }); await m.waitForTimeout(1500)
+  await m.waitForFunction((min) => document.querySelectorAll('#h-mlist .mrow').length >= min, MIN_ROWS, { timeout: 40000 }); await m.waitForTimeout(1500)
   const n = await m.$$eval('#h-mlist .mrow', x => x.length); const rail = await m.$eval('.rail', x => getComputedStyle(x).position); must(rail === 'fixed', 'rail ' + rail)
   if (process.env.SHOTS) await m.screenshot({ path: process.env.SHOTS + '/mobile_home.png' })
   return n + ' 列'

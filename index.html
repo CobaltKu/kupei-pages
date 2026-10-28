@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" class="kp-locked">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -10,6 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./legacy/styles.css?v=__BUILD__">
+<!-- 登入閘門：登入前整個工作區不顯示（bridge.ts 登入後移除 kp-locked），避免先閃出空的介面 -->
+<style>html.kp-locked .app, html.kp-locked #menuHost, html.kp-locked .toast, html.kp-locked .tip2 { display: none !important; }</style>
 </head>
 <body>
 <div class="app">

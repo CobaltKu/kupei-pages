@@ -1,10 +1,13 @@
-// 數據顯示效能量測＋防退化門檻（對線上 Workers 資料）。
-// BASE=http://127.0.0.1:5173/ node e2e_pages_perf.mjs
+// 數據顯示效能量測＋防退化門檻（對線上 Workers 資料）。網站必須登入（2026-10-28）：要設 KUPEI_TEST_SESSION=<登入權杖>，沒設就略過
+// （門檻依線上約 1,979 家設計；見 tests/_kupei_test.mjs）。線上限流每分鐘 30 次，RUNS 不要開太大。
+// BASE=http://127.0.0.1:5173/ KUPEI_TEST_SESSION=… node e2e_pages_perf.mjs
 //   RUNS=3（每種情況跑幾次，取中位數）  OUT=<路徑>（量測結果另存 JSON）  NOGATE=1（只量不判門檻，量舊版用）
 // 量什麼：首次載入／回訪到首頁第一列與全部列、首頁整表重畫次數、排序／篩選／搜尋跳至／個股頁／自選頁的耗時、
 // 主執行緒長任務（>50ms）總長、行情請求次數。桌機 1440 與手機 390（裝置模擬）各量。
 import { chromium } from 'playwright'
 import fs from 'node:fs'
+import { routeBackend, seedSession, liveOnly } from './_kupei_test.mjs'
+liveOnly('e2e_pages_perf')
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const RUNS = +(process.env.RUNS || 3)
 const GATE = !process.env.NOGATE
@@ -83,7 +86,7 @@ for (const [label, opts] of [['desktop', DESKTOP], ['mobile', MOBILE]]) {
   const mobile = label === 'mobile'
   for (let i = 0; i < RUNS; i++) {
     const ctx = await b.newContext(opts)
-    await ctx.route('**/fonts.g*/**', (r) => r.abort())
+    await routeBackend(ctx); await seedSession(ctx)
     await ctx.addInitScript(PROBE)
     await ctx.addInitScript((ids) => { if (!localStorage.getItem('kupei3_watch')) localStorage.setItem('kupei3_watch', JSON.stringify({ groups: [{ id: 1, name: '自選1', ids }], cur: 1 })) }, WATCH)
     const reqs = []
@@ -159,8 +162,8 @@ await check('桌機排序（重用列）：順序由高到低、排序欄標示�
 })
 await check('自選頁：近 20 日與月營收載入中顯示「…」，回來後換成小圖', async () => {
   const ctx = await b2.newContext(DESKTOP)
-  await ctx.route('**/fonts.g*/**', (r) => r.abort())
-  await ctx.route('**/api/market/history**', async (r) => { await new Promise((x) => setTimeout(x, 2500)); r.continue() })
+  await routeBackend(ctx); await seedSession(ctx)
+  await ctx.route('**/api/market/history**', async (r) => { await new Promise((x) => setTimeout(x, 2500)); r.fallback() })
   await ctx.addInitScript((ids) => localStorage.setItem('kupei3_watch', JSON.stringify({ groups: [{ id: 1, name: '自選1', ids }], cur: 1 })), WATCH.slice(0, 3))
   const p = await ctx.newPage(); await p.goto(BASE + '#/watch')
   await p.waitForFunction(() => document.querySelectorAll('#w-body tr[data-row]').length === 3, null, { timeout: 40000 })

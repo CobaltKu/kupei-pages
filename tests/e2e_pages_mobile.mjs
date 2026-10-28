@@ -1,7 +1,9 @@
-// D-11 手機預檢：iPhone SE／14／Pro Max 寬度（模擬 iOS Safari UA、觸控），對線上 Workers 資料，不寫入任何資料。
+// D-11 手機預檢：iPhone SE／14／Pro Max 寬度（模擬 iOS Safari UA、觸控），不寫入任何資料。
 // 每頁檢查：沒有橫向捲動、沒有 JS 錯誤；輸入框字級 ≥16px（iOS 小於 16px 會在點進去時自動放大）。
-// BASE=http://127.0.0.1:5173/ node e2e_pages_mobile.mjs（SHOTS=<資料夾> 另存 iPhone 14 截圖）
+// 網站必須登入（2026-10-28）：登入畫面另外檢查；其他頁用假的已登入 session＋fixture 資料（或 KUPEI_TEST_SESSION 讀線上），見 tests/_kupei_test.mjs。
+// BASE=http://127.0.0.1:5173/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_mobile.mjs（SHOTS=<資料夾> 另存 iPhone 14 截圖）
 import { chromium } from 'playwright'
+import { routeBackend, seedSession } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
 const results = [], errs = []
@@ -10,8 +12,19 @@ const must = (c, m) => { if (!c) throw new Error(m) }
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
 const PAGES = [['首頁', ''], ['個股（有明細）', '#/stock/2330/home'], ['個股（未評估）', '#/stock/1589/home'], ['自選', '#/watch'], ['新聞', '#/news'], ['新聞設定', '#/news-settings'], ['報告設定', '#/report-settings'], ['狀態', '#/status'], ['說明', '#/help']]
 for (const [nm, w, h] of [['iPhone SE', 375, 667], ['iPhone 14', 390, 844], ['iPhone Pro Max', 430, 932]]) {
-  const ctx = await b.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: UA })
-  const p = await ctx.newPage(); await p.route('**/fonts.g*/**', (r) => r.abort())
+  const opts = { viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: UA }
+  await check(`${nm}｜登入畫面：不橫向捲動、卡片不超出畫面、輸入框 ≥16px`, async () => {
+    const g = await b.newContext(opts); await routeBackend(g)
+    const q = await g.newPage(); q.on('pageerror', (e) => errs.push(nm + ' JS 錯誤：' + e.message))
+    await q.goto(BASE); await q.waitForSelector('#kp-gate #acct-user'); await q.waitForTimeout(500)
+    const m = await q.evaluate(() => { const r = document.querySelector('.gate-card').getBoundingClientRect(); return { sw: document.documentElement.scrollWidth, l: r.left, r: r.right, iw: innerWidth, fs: ['acct-user', 'acct-pass'].map((i) => parseFloat(getComputedStyle(document.getElementById(i)).fontSize)) } })
+    if (nm === 'iPhone 14' && process.env.SHOTS) await q.screenshot({ path: `${process.env.SHOTS}/m_login.png` })
+    await g.close()
+    must(m.sw <= m.iw && m.l >= 0 && m.r <= m.iw, `超出 ${m.l}～${m.r}／${m.iw}（scrollWidth ${m.sw}）`); must(m.fs.every((x) => x >= 16), '字級 ' + m.fs); return ''
+  })
+  const ctx = await b.newContext(opts)
+  await routeBackend(ctx); await seedSession(ctx)
+  const p = await ctx.newPage()
   p.on('pageerror', (e) => errs.push(nm + ' JS 錯誤：' + e.message))
   for (const [k, hash] of PAGES) {
     await check(`${nm}｜${k}：不橫向捲動、輸入框 ≥16px`, async () => {
@@ -23,9 +36,10 @@ for (const [nm, w, h] of [['iPhone SE', 375, 667], ['iPhone 14', 390, 844], ['iP
     })
     if (nm === 'iPhone 14' && process.env.SHOTS) await p.screenshot({ path: `${process.env.SHOTS}/m_${PAGES.findIndex((x) => x[0] === k)}.png` })
   }
-  await check(`${nm}｜帳號視窗：不超出畫面、輸入框 ≥16px`, async () => {
-    await p.goto(BASE); await p.waitForTimeout(1500); await p.click('[data-acct]'); await p.waitForSelector('#acct-user')
-    const m = await p.evaluate(() => { const r = document.querySelector('.acct-modal').getBoundingClientRect(); return { l: r.left, r: r.right, iw: innerWidth, fs: ['acct-user', 'acct-pass'].map((i) => parseFloat(getComputedStyle(document.getElementById(i)).fontSize)) } })
+  await check(`${nm}｜帳號視窗（已登入、改密碼展開）：不超出畫面、輸入框 ≥16px`, async () => {
+    await p.goto(BASE); await p.waitForTimeout(1500); await p.click('[data-acct]'); await p.waitForSelector('#acct-pw-box')
+    await p.evaluate(() => { document.getElementById('acct-pw-box').open = true })
+    const m = await p.evaluate(() => { const r = document.querySelector('.acct-modal').getBoundingClientRect(); return { l: r.left, r: r.right, iw: innerWidth, fs: ['acct-pw-cur', 'acct-pw-new'].map((i) => parseFloat(getComputedStyle(document.getElementById(i)).fontSize)) } })
     must(m.l >= 0 && m.r <= m.iw, `視窗超出 ${m.l}～${m.r}／${m.iw}`); must(m.fs.every((x) => x >= 16), '字級 ' + m.fs); return ''
   })
   await ctx.close()

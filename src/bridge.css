@@ -33,3 +33,17 @@
   .tog, .rdtog { min-height: 36px; align-items: center; }
   #s-back, #s-prev, #s-next { min-width: 36px; min-height: 36px; }
 }
+/* 登入閘門（2026-10-28）：沒登入時整頁只有這張卡片 */
+.gate { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; box-sizing: border-box; }
+.gate-card { width: min(380px, 100%); box-sizing: border-box; background: var(--surface, #16191c); color: var(--text, #e6e8ea); border: 1px solid var(--line2, #30363c);
+  border-radius: 12px; padding: 22px 20px 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, .35); }
+.gate-logo { font-weight: 700; font-size: 18px; letter-spacing: .5px; color: var(--accent, #e8833a); margin-bottom: 10px; }
+.gate-card h1 { margin: 0 0 6px; font-size: 18px; }
+.gate-card p { margin: 6px 0; line-height: 1.6; font-size: 13px; }
+.gate-card label { display: block; margin: 12px 0 0; font-size: 12px; color: var(--muted, #9aa3ab); }
+.gate-card input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 10px 12px; font: inherit; font-size: 16px; color: var(--text, #e6e8ea);
+  background: var(--bg, #101214); border: 1px solid var(--line2, #30363c); border-radius: 8px; }
+.gate-card input:focus { outline: 2px solid var(--accent, #e8833a); outline-offset: 1px; }
+.gate-card .acct-btn { min-height: 40px; padding: 9px 18px; font-size: 14px; }
+.gate-submit { flex: 1; }
+.gate-note { margin-bottom: 4px !important; }

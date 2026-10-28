@@ -1,6 +1,8 @@
 // 本機／雲端同步下來的 kupei3_* 被改寫成惡意內容時，畫面不可執行注入的程式，且仍能正常顯示。
-// BASE=http://127.0.0.1:5173/ node e2e_pages_xss.mjs（不需登入、不建立帳號）
+// 網站必須登入（2026-10-28）：用假的已登入 session＋fixture 資料（tests/_kupei_test.mjs），雲端文件是假的、不建立帳號。
+// BASE=http://127.0.0.1:5173/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_xss.mjs
 import { chromium } from 'playwright'
+import { routeBackend, seedSession } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
 const results = []
@@ -37,6 +39,7 @@ const BROKEN = { kupei3_watch: '{"groups":"oops","cur":{}}', kupei3_news: '[1,2,
 
 async function open(ls) {
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } })
+  await routeBackend(ctx); await seedSession(ctx)
   await ctx.addInitScript((data) => { if (!sessionStorage.getItem('seeded')) { for (const k in data) localStorage.setItem(k, data[k]); sessionStorage.setItem('seeded', '1') } }, ls)
   const p = await ctx.newPage()
   p.errs = []

@@ -1,13 +1,17 @@
 // D-10：正式 r8 資料（run server_v3_0_30_r8_r2_20261027）的擴充欄位都有進畫面：第二階段處置、同業名次、定義／目標、估價、說明、狀態頁。
-// 對線上 Workers 資料，不建立帳號、不寫任何資料。BASE=http://127.0.0.1:5173/ node e2e_pages_r8.mjs
+// 對線上 Workers 資料，不建立帳號、不寫任何資料。網站必須登入（2026-10-28）：要設 KUPEI_TEST_SESSION=<登入權杖>，沒設就略過（見 tests/_kupei_test.mjs）。
+// BASE=http://127.0.0.1:5173/ KUPEI_TEST_SESSION=… node e2e_pages_r8.mjs
 import { chromium } from 'playwright'
+import { routeBackend, seedSession, liveOnly } from './_kupei_test.mjs'
+liveOnly('e2e_pages_r8')
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
 const results = [], errs = []
 const check = async (name, fn) => { try { const n = await fn(); results.push(['PASS', name, n || '']) } catch (e) { results.push(['FAIL', name, e.message.split('\n')[0]]) } }
 const must = (c, m) => { if (!c) throw new Error(m) }
-const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage()
-await p.route('**/fonts.g*/**', (r) => r.abort())
+const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } })
+await routeBackend(ctx); await seedSession(ctx)
+const p = await ctx.newPage()
 p.on('pageerror', (e) => errs.push('JS 錯誤：' + e.message))
 const txt = async (sel) => ((await p.$(sel)) ? (await p.innerText(sel)).replace(/\s+/g, ' ') : '')
 const stock = async (id, ready) => { await p.goto(BASE + '#/stock/' + id + '/home'); await p.waitForFunction(ready, null, { timeout: 30000 }); await p.waitForTimeout(400) }

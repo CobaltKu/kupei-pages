@@ -1,8 +1,8 @@
-// 盤中行情、新聞、報告：後端新端點全部用假的回應（route mock），評分與收盤行情用線上資料。不建立真實帳號。
-// BASE=http://127.0.0.1:5382/（無權杖版建置）ENVFILE=<含 VITE_KUPEI_TOKEN 的檔> node e2e_pages_live.mjs（SHOTS=<資料夾> 另存截圖）
+// 盤中行情、新聞、報告：後端新端點全部用假的回應（route mock），評分與收盤行情用 fixture（或 KUPEI_TEST_SESSION 讀線上）。不建立真實帳號。
+// 網站必須登入（2026-10-28）：每個裝置都放假的已登入 session（kps_mock_1）；「未登入引導登入」的情境已不存在。見 tests/_kupei_test.mjs。
+// BASE=http://127.0.0.1:5382/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_live.mjs（SHOTS=<資料夾> 另存截圖）
 import { chromium } from 'playwright'
-import fs from 'node:fs'
-const ENV = Object.fromEntries(fs.readFileSync(process.env.ENVFILE, 'utf8').split('\n').map((l) => l.replace('\r', '')).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]))
+import { routeBackend } from './_kupei_test.mjs'
 const BASE = process.env.BASE || 'http://127.0.0.1:5173/'
 const SHOTS = process.env.SHOTS || ''
 const b = await chromium.launch(process.env.CHR ? { executablePath: process.env.CHR } : {})
@@ -70,9 +70,10 @@ const SEED = {
 }
 async function open(hash = '', seed = SEED, clock = false) {
   const ctx = await b.newContext({ viewport: { width: 1280, height: 900 } })
+  seed = { 'kupei:session': JSON.stringify({ token: 'kps_mock_1', username: 't-user', expiresAt: new Date(Date.now() + 864e5).toISOString() }), ...seed }
   await ctx.addInitScript((data) => { if (!sessionStorage.getItem('seeded')) { for (const k in data) localStorage.setItem(k, data[k]); sessionStorage.setItem('seeded', '1') } }, seed)
-  // 評分與收盤行情用線上資料（帶唯讀權杖，只在記憶體）；新端點全部假的
-  await ctx.route(/\/(data\/|api\/market\/(latest|history))/, (route) => route.request().method() === 'OPTIONS' ? route.continue() : route.continue({ headers: { ...route.request().headers(), authorization: 'Bearer ' + ENV.VITE_KUPEI_TOKEN } }))
+  // 評分與收盤行情：fixture 或 KUPEI_TEST_SESSION 讀線上；新端點全部假的（下面的 route 後掛、優先）
+  await routeBackend(ctx)
   await ctx.route(/\/api\/(market\/intraday|news|reports)/, mockApi)
   await ctx.route('**/api/auth/**', (route) => {
     const r = route.request()
@@ -213,7 +214,7 @@ await check('報告：個股頁列出已產生報告（含草稿）與摘要', a
   P = await open('#/stock/2330/home'); await P.waitForTimeout(2500)
   const opts = await P.$$eval('#s-period option', (x) => x.map((o) => o.textContent))
   must(opts.length === 2 && opts.some((o) => /2026Q2 2（草稿）/.test(o)) && opts.some((o) => o === '2026Q2 1'), '期別：' + JSON.stringify(opts))
-  must(!calls(/requests$/).length, '未登入不該讀請求紀錄')
+  must(calls(/requests$/).every((c) => c.method === 'GET' && c.auth === 'Bearer kps_mock_1'), '請求紀錄應只用登入權杖讀：' + JSON.stringify(calls(/requests$/).map((c) => c.auth)))
   await noInject(P)
   await shot(P, 'report_stock_card', '#s-report')
 })
@@ -228,21 +229,14 @@ await check('報告單篇：summary 以純文字呈現（不解析 markdown、�
   await noInject(P)
   await shot(P, 'report_page')
 })
-await check('報告設定：未登入按「產生報告」引導登入，不送請求', async () => {
+await check('報告設定：歷次報告與自己的請求（已登入），不顯示上傳參考資料', async () => {
   await go(P, '#/report-settings', 2000)
-  const hist = await P.innerText('#rs-history'); must(/2026Q2 1/.test(hist) && /失敗/.test(hist) && /登入帳號後顯示/.test(hist), '歷次報告：' + hist.slice(0, 160))
+  const hist = await P.innerText('#rs-history'); must(/2026Q2 1/.test(hist) && /失敗/.test(hist) && !/登入帳號後顯示/.test(hist), '歷次報告：' + hist.slice(0, 160))
   must(!(await P.isVisible('#rs-infield')) && !/inputs\//.test(await P.innerText('#rs-panel')), 'Pages 不支援上傳參考資料：整欄應隱藏、不顯示內部路徑')
-  M.calls.length = 0
-  await P.click('[data-repgen]'); await P.waitForSelector('.acct-modal', { timeout: 5000 })
-  must(/登入/.test(await P.innerText('.acct-modal h2')), '沒有打開登入視窗')
-  must(!calls(/requests$/).some((c) => c.method === 'POST'), '未登入不該送出請求')
-  await shot(P, 'report_settings_login')
+  must(/產生報告/.test(await P.innerText('[data-repgen]')) && !/需登入/.test(await P.innerText('[data-repgen]')), '按鈕：' + await P.innerText('[data-repgen]'))
 })
-await check('報告設定：登入後送出 202、重複回同一筆、超過上限提示 QUOTA_EXCEEDED', async () => {
-  await P.fill('#acct-user', 't-user'); await P.fill('#acct-pass', 'password-123'); await P.click('[data-acct-submit]')
-  await P.waitForFunction(() => document.querySelector('.acct-modal')?.textContent.includes('已登入'), null, { timeout: 8000 })
-  await P.keyboard.press('Escape'); await P.waitForTimeout(1500)
-  await go(P, '#/watch', 300); await go(P, '#/report-settings', 1500) // 重新畫報告設定（登入後重讀自己的請求）
+await check('報告設定：送出 202、重複回同一筆、超過上限提示 QUOTA_EXCEEDED', async () => {
+  await go(P, '#/watch', 300); await go(P, '#/report-settings', 1500) // 重新畫報告設定（重讀自己的請求）
   must(calls(/requests$/).some((c) => c.method === 'GET' && c.auth === 'Bearer kps_mock_1'), '登入後沒有用登入權杖讀請求紀錄')
   const toast = async () => { await P.waitForFunction(() => document.getElementById('toast').style.display === 'flex', null, { timeout: 5000 }); return P.innerText('#toast-msg') }
   M.postMode = 'new'; M.calls.length = 0

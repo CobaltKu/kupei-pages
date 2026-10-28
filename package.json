@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node tools/check-dist-secrets.mjs dist",
     "preview": "vite preview",
     "store:backup": "node tools/store-backup.mjs export",
     "store:restore": "node tools/store-backup.mjs restore",
-    "test:store-backup": "node --test tests/store-backup.test.mjs"
+    "test:store-backup": "node --test tests/store-backup.test.mjs",
+    "check:dist": "node tools/check-dist-secrets.mjs dist",
+    "test:dist": "node --test tests/check-dist-secrets.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
