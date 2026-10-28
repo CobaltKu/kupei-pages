@@ -853,7 +853,8 @@
           {
             "type": "object",
             "required": [
-              "summary"
+              "summary",
+              "inputs"
             ],
             "properties": {
               "summary": {
@@ -862,6 +863,14 @@
                   "null"
                 ],
                 "description": "純文字或 markdown"
+              },
+              "inputs": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "$ref": "#/components/schemas/ReportInputRef"
+                },
+                "description": "報告引用的參考檔（2026-10-28 起；沒有引用是空陣列）"
               }
             }
           }
@@ -913,6 +922,15 @@
             "items": {
               "$ref": "#/components/schemas/ReportFile"
             }
+          },
+          "inputs": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^in_[0-9a-f]{32}$"
+            },
+            "description": "引用的參考檔 id（同一家公司、未刪除；推送後鎖定、不能刪）。不存在或已刪除 400 BAD_REQUEST，details: { missing }"
           }
         },
         "description": "本文最多 300 KB"
@@ -1037,6 +1055,83 @@
             ]
           }
         }
+      },
+      "ReportInputRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mime",
+          "bytes",
+          "sha256",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^in_[0-9a-f]{32}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "清理過的原檔名（去路徑與控制字元，副檔名小寫）"
+          },
+          "mime": {
+            "type": "string",
+            "enum": [
+              "application/pdf",
+              "text/plain",
+              "text/markdown",
+              "text/csv",
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              "image/png",
+              "image/jpeg"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20971520
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "description": "報告引用的參考檔（不含上傳者）"
+      },
+      "ReportInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ReportInputRef"
+          },
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "createdBy",
+              "locked"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^\\d{4}$"
+              },
+              "createdBy": {
+                "type": "string",
+                "description": "'u:<帳號 id>' 或 'pipeline'"
+              },
+              "locked": {
+                "type": "boolean",
+                "description": "已被報告引用：不能刪（409 INPUT_LOCKED）"
+              }
+            }
+          }
+        ]
       }
     },
     "responses": {
@@ -1181,6 +1276,16 @@
           "minimum": 1
         },
         "description": "版次，正整數"
+      },
+      "InputId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^in_[0-9a-f]{32}$"
+        },
+        "description": "參考檔 id"
       }
     }
   },
@@ -2441,7 +2546,7 @@
     },
     "/api/reports/{code}/{period}/{rev}": {
       "get": {
-        "summary": "單一份報告（含 summary；唯讀、寫入、登入權杖）",
+        "summary": "單一份報告（含 summary 與引用的參考檔 metadata；唯讀、寫入、登入權杖）",
         "parameters": [
           {
             "$ref": "#/components/parameters/Code"
@@ -2532,7 +2637,7 @@
             }
           },
           "400": {
-            "description": "內容或路徑不對",
+            "description": "內容或路徑不對；inputs 有不存在、已刪除或別家公司的參考檔時 details: { missing }",
             "content": {
               "application/json": {
                 "schema": {
@@ -2934,6 +3039,396 @@
           }
         },
         "description": "2026-10-28 起檢查狀態轉移（409 INVALID_TRANSITION）。建立超過 90 天的 DONE／FAILED 請求在 PATCH 時順便清掉（一次最多 20 筆）。"
+      }
+    },
+    "/api/reports/{code}/inputs": {
+      "get": {
+        "summary": "列出參考檔（登入權杖：自己的；推送權杖：全部）",
+        "description": "登入權杖（kps_）只限自己上傳的；推送權杖（報告管線）看得到全部。唯讀、寫入權杖與站長 cookie 403。每個 IP 每分鐘 60 次（WRITE_LIMIT）",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK（不含已刪除，新→舊，最多 200 筆）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "inputs"
+                  ],
+                  "properties": {
+                    "inputs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReportInput"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "code 格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
+      "post": {
+        "summary": "上傳一個參考檔（本文是檔案原始位元組）",
+        "description": "登入權杖（kps_）只限自己上傳的；推送權杖（報告管線）看得到全部。唯讀、寫入權杖與站長 cookie 403。每個 IP 每分鐘 60 次（WRITE_LIMIT）；上傳另外每個上傳者每分鐘 60 個檔。副檔名、Content-Type、檔頭三者都要對（文字檔要 UTF-8、不含 NUL）。校驗碼交給儲存端驗證。每個上傳者最多 50 個、合計 200 MiB。",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "原檔名（會清理：去路徑、控制字元，最多 120 字）；副檔名 pdf、txt、md、csv、xlsx、png、jpg、jpeg"
+          },
+          {
+            "name": "X-Content-SHA256",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "description": "檔案的 SHA-256（64 位小寫 hex）"
+          },
+          {
+            "name": "Content-Length",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20971520
+            },
+            "description": "有帶就先檢查大小；沒帶也會邊讀邊擋"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "檔案原始位元組；Content-Type 依副檔名",
+          "content": {
+            "application/pdf": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "text/markdown": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "text/csv": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "text/x-markdown": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已存",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportInput"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BAD_REQUEST（缺 name、校驗碼格式不對、空檔、長度與 Content-Length 不符）或 CHECKSUM_MISMATCH（校驗碼和內容不符，檔案沒有存）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "TOO_LARGE（單檔超過 20 MiB）或 QUOTA_EXCEEDED（超過 50 個或 200 MiB；details: { files, bytes, maxFiles, maxBytes }）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "UNSUPPORTED_TYPE（副檔名、Content-Type、內容不在允許範圍或對不上）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/reports/{code}/inputs/{id}": {
+      "get": {
+        "summary": "下載參考檔（attachment）",
+        "description": "登入權杖（kps_）只限自己上傳的；推送權杖（報告管線）看得到全部。唯讀、寫入權杖與站長 cookie 403。每個 IP 每分鐘 60 次（WRITE_LIMIT）。回應標頭：Content-Disposition: attachment; filename*=UTF-8''…、X-Content-Type-Options: nosniff、Cache-Control: private, no-store、Content-Security-Policy: sandbox。沒有公開網址。",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "$ref": "#/components/parameters/InputId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "檔案本身",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "code 格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "沒有這個參考檔，或不是自己上傳的（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
+      "delete": {
+        "summary": "刪除參考檔（立即刪除、無法復原）",
+        "description": "登入權杖（kps_）只限自己上傳的；推送權杖（報告管線）看得到全部。唯讀、寫入權杖與站長 cookie 403。每個 IP 每分鐘 60 次（WRITE_LIMIT）",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "$ref": "#/components/parameters/InputId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已刪除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "code 格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "沒有這個參考檔，或不是自己上傳的（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "已被報告引用（INPUT_LOCKED）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
       }
     }
   }

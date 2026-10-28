@@ -47,7 +47,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.register()`／`kupei.auth.login()`（註冊畫面先呼叫 `kupei.auth.config()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。沒登入時 App 退回本機模式（只存 localStorage、顯示「未登入，只存在這台裝置」），不要報錯；評分與行情不需要登入。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
-12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存檔案，不要做上傳。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period)`，進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。報告是外部管線產生的，後端不會自己產生。
+12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存報告檔案。使用者要給報告管線的**參考檔**（PDF、圖片、試算表、文字檔）用 `kupei.reportInputs.upload(code, file)` 上傳（2026-10-28 起，只限登入；見「報告參考檔」一節），不要自己組上傳請求、不要把檔案轉 base64 放進 JSON 或雲端文件。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period)`，進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。報告是外部管線產生的，後端不會自己產生。
 
 ## 端點
 
@@ -199,7 +199,7 @@ await kupei.auth.logout()
 | `GET` | `/api/news?q=台積電,2330&exclude=廣告&days=3` | `{ items: [{ title, url, source, publishedAt }], fetchedAt, source: "google-news-rss", stale? }`。`q` 1～5 個關鍵字（之間是 OR）、`exclude` 0～5 個排除字（**只比對標題**）、每個 1～50 字，逗號分隔；`days` 1、3 或 5（省略＝3）。不合法 400。新→舊、最多 50 則、只有 `days` 天內的；`url` 一定是 https（Google 新聞的轉址連結，打開會到原文）；`title` 已去掉結尾的「 - 來源」。伺服器同一個查詢 30 分鐘內只抓一次，瀏覽器可留 5 分鐘（`private, max-age=300`）。來源暫時抓不到時回較舊的結果並帶 `"stale": true`，完全沒有舊結果時 **502** `UPSTREAM_ERROR` |
 | `GET` | `/api/news/sources` | `{ sources: [{ id: "google-news", … }, { id: "bing-news", name: "Bing 新聞", … }] }`。後端先抓 Bing 新聞（每個關鍵字各查一次再合併），失敗才改抓 Google 新聞（Google 會擋 Cloudflare 機房 IP）；`source` 欄位目前固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
 | `GET` | `/api/reports/<code>` | `{ reports: [{ period, rev, status, title, generatedAt, url, files }] }`（不含 `summary`）。`code` 4 碼數字。`period` 新→舊、同期 `rev` 新→舊；`status` 是 `DRAFT`／`PUBLISHED`／`FAILED`；`url` 是 https 或 `null`；`files` 是 `[{ name, url }]`（外部 https 連結，後端不存檔案） |
-| `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
+| `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）與 `inputs: [{ id, name, mime, bytes, sha256, createdAt }]`（報告引用的參考檔，2026-10-28 起；沒有引用是 `[]`；下載只限上傳者本人）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
 | `POST` | `/api/reports/<code>/requests` | **登入權杖**。本文 `{ "period": "2026Q2", "trigger": "MANUAL" }` → **202** `{ id, status: "QUEUED", createdAt }`。同一期已經在排隊就回那一筆（**200**，同樣形狀）。每個帳號最多 20 筆排隊中，超過 **403** `QUOTA_EXCEEDED`（`details: { queued, maxQueued }`） |
 | `GET` | `/api/reports/<code>/requests` | **登入權杖**。`{ requests: [{ id, period, trigger, status, createdAt, updatedAt, message }] }`，只有自己的，新→舊。`status`：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，`message` 是管線留的說明（可能 `null`） |
 
@@ -209,12 +209,41 @@ await kupei.auth.logout()
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }` |
+| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`），不會因為報告刪除或改版而解鎖 |
 | `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404 |
 | `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50 |
 | `PATCH` | `/api/reports/requests/<id>` | 本文 `{ status: "RUNNING"\|"DONE"\|"FAILED", message?: ≤500 字 }` → `{ status: "ok" }`；沒有這筆 404。**狀態只能照順序改**（2026-10-28 起）：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，或 `QUEUED`→`FAILED`；`DONE`、`FAILED` 之後不能再改。不合順序（例如 `QUEUED` 直接 `DONE`）**409** `INVALID_TRANSITION`，`details: { from, to }`——管線要先 PATCH `RUNNING`。建立超過 90 天的 `DONE`／`FAILED` 會被自動清掉 |
 
 推送權杖錯或沒帶 → 401（不帶 CORS）。用唯讀、寫入、登入權杖打這四個也是 401。
+
+### 報告參考檔 `/api/reports/<code>/inputs`（2026-10-28）
+
+使用者提供給報告管線的參考資料（財報 PDF、截圖、試算表、筆記）。檔案存在**私人**物件儲存，沒有公開網址；下載一律經後端驗權杖、以附件（attachment）回傳。
+
+**誰能用**：**登入權杖**可以上傳，並且只看得到、下載、刪除**自己上傳的**（別人的一律 404）。唯讀、寫入權杖 **403** `FORBIDDEN`。報告管線用推送權杖可以列出、下載、刪除全部，也能上傳（`createdBy: "pipeline"`）。每個 IP 每分鐘 60 次（同 `/api/store`），上傳另外每個帳號每分鐘 60 個檔。
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `POST` | `/api/reports/<code>/inputs?name=<原檔名>` | 本文是**檔案的原始位元組**（不是 multipart、不是 JSON）。標頭：`Content-Type` 依副檔名（見下）、`X-Content-SHA256: <檔案的 SHA-256，64 位小寫 hex>`。→ **201** `{ id, code, name, mime, bytes, sha256, createdAt, createdBy, locked }`。`name` 是清理過的檔名（去路徑與控制字元、最多 120 字） |
+| `GET` | `/api/reports/<code>/inputs` | `{ inputs: [同上形狀] }`：自己上傳、沒刪除的，新→舊 |
+| `GET` | `/api/reports/<code>/inputs/<id>` | 下載檔案本身（`Content-Disposition: attachment`、`Cache-Control: private, no-store`）。不是自己的或不存在 **404** |
+| `DELETE` | `/api/reports/<code>/inputs/<id>` | `{ status: "ok" }`。**立即刪除、無法復原**（後端沒有備份）。已被報告引用 **409** `INPUT_LOCKED`；不是自己的或不存在 **404** |
+
+**限制**：單檔 ≤ **20 MiB**（413 `TOO_LARGE`）；每個帳號最多 **50 個檔、合計 200 MiB**（**413** `QUOTA_EXCEEDED`，`details: { files, bytes, maxFiles, maxBytes }`；刪掉舊的就有空間）。只接受下表，**副檔名、`Content-Type`、檔案內容（檔頭；文字檔要 UTF-8、不含 NUL）三者都要對**，否則 **415** `UNSUPPORTED_TYPE`：
+
+| 副檔名 | `Content-Type` |
+| --- | --- |
+| `pdf` | `application/pdf` |
+| `png` | `image/png` |
+| `jpg`、`jpeg` | `image/jpeg` |
+| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+| `csv` | `text/csv`（UTF-8；Big5 的 CSV 會被拒，請先另存成 UTF-8） |
+| `txt` | `text/plain`（UTF-8） |
+| `md` | `text/markdown`（UTF-8） |
+
+`X-Content-SHA256` 和實際收到的內容不符（傳輸中壞掉、算錯）→ **400** `CHECKSUM_MISMATCH`，檔案沒有存，重傳即可。`starter/kupei-client.ts` 的 `kupei.reportInputs.upload(code, file)` 已經幫你算 SHA-256、依副檔名設 `Content-Type`，**直接用它**。
+
+> 這些檔**沒有備份**：刪除就沒了，物件儲存出問題也救不回來。請提醒使用者自留原檔。被報告引用的檔不能刪（報告發布後的參考資料不會被悄悄換掉）。
 
 ### 健康檢查
 
@@ -230,16 +259,19 @@ await kupei.auth.logout()
 | 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
-| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
+| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、唯讀或寫入權杖打報告參考檔 `/api/reports/<code>/inputs*`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
-| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }` |
+| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }`。**報告參考檔超過 50 個或 200 MiB 時是 413**（不是 403），`details` 是 `{ files, bytes, maxFiles, maxBytes }` |
+| 409 | `INPUT_LOCKED` | 報告參考檔已被報告引用，不能刪除 |
+| 400 | `CHECKSUM_MISMATCH` | 報告參考檔上傳的 `X-Content-SHA256` 和收到的內容不符；檔案沒有存，重傳即可 |
+| 415 | `UNSUPPORTED_TYPE` | 報告參考檔的副檔名、`Content-Type` 或內容不在允許範圍，或三者對不上 |
 | 409 | `INVALID_TRANSITION` | 報告請求的狀態不能這樣改（推送權杖的 `PATCH /api/reports/requests/<id>`）；`error.details` 是 `{ from, to }` |
-| 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過上限：雲端文件 300 KB、帳號端點（`/api/auth/*`）4 KB、報告請求 4 KB |
-| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 30 次）；`/api/news` 沒命中快取的新查詢 6 次。IPv6 以 /64 為一組，超過一律帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
+| 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過上限：雲端文件 300 KB、帳號端點（`/api/auth/*`）4 KB、報告請求 4 KB、報告參考檔單檔 20 MiB |
+| 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 與 `/api/reports/<code>/inputs*` 各 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 30 次）；`/api/news` 沒命中快取的新查詢 6 次。IPv6 以 /64 為一組，超過一律帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
 | 502 | `UPSTREAM_ERROR` | `/api/news` 的新聞來源暫時抓不到、伺服器也沒有舊結果；稍後再試（不要立刻重送） |
 | 404 | `NOT_FOUND` | 刪除不存在的文件、沒有這份報告（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 
-> 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`）、`/api/*` 請求沒帶 `Authorization`、送了不允許的請求標頭（預檢只允許 `Authorization`、`Content-Type`、`If-None-Match`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。回應沒有 `Access-Control-Expose-Headers`，所以跨來源的 JS 讀不到 `Retry-After`、`ETag` 等非基本標頭（瀏覽器自己的快取驗證不受影響）。
+> 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`）、`/api/*` 請求沒帶 `Authorization`、送了不允許的請求標頭（預檢只允許 `Authorization`、`Content-Type`、`If-None-Match`、`X-Content-SHA256`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。回應沒有 `Access-Control-Expose-Headers`，所以跨來源的 JS 讀不到 `Retry-After`、`ETag` 等非基本標頭（瀏覽器自己的快取驗證不受影響）。
 
 ## 快取與載入（2026-10-25 實測後的建議；`starter/kupei-client.ts` 已照做）
 
@@ -362,7 +394,11 @@ interface NewsSource { id: string; name: string; url: string }
 type ReportStatus = 'DRAFT' | 'PUBLISHED' | 'FAILED'
 interface ReportFile { name: string; url: string }
 interface ReportMeta { period: string; rev: number; status: ReportStatus; title: string; generatedAt: string; url: string | null; files: ReportFile[] }
-interface Report extends ReportMeta { summary: string | null }
+interface Report extends ReportMeta { summary: string | null; inputs: ReportInputRef[] }
+// 報告參考檔（登入權杖；GET /api/reports/<code>/<period>/<rev> 的 inputs 是不含 code／createdBy／locked 的 ReportInputRef）
+type ReportInputMime = 'application/pdf' | 'text/plain' | 'text/markdown' | 'text/csv' | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' | 'image/png' | 'image/jpeg'
+interface ReportInputRef { id: string; name: string; mime: ReportInputMime; bytes: number; sha256: string; createdAt: string }
+interface ReportInput extends ReportInputRef { code: string; createdBy: string; locked: boolean }
 // POST／GET /api/reports/<code>/requests（登入權杖）
 type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
 interface ReportRequestCreated { id: number; status: 'QUEUED'; createdAt: string }

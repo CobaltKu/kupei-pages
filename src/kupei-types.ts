@@ -364,9 +364,41 @@ export interface ReportMeta {
   files: ReportFile[]
 }
 
-/** GET /api/reports/<code>/<period>/<rev>：多了 summary（純文字或 markdown，可能 null） */
+/** GET /api/reports/<code>/<period>/<rev>：多了 summary（純文字或 markdown，可能 null）與引用的參考檔 */
 export interface Report extends ReportMeta {
   summary: string | null
+  /** 報告引用的參考檔 metadata（2026-10-28 起；沒有引用是空陣列）。下載只限上傳者本人（kupei.reportInputs.download） */
+  inputs: ReportInputRef[]
+}
+
+/** 報告引用的參考檔（不含上傳者） */
+export interface ReportInputRef {
+  id: string
+  name: string
+  mime: ReportInputMime
+  bytes: number
+  /** 64 位小寫 hex */
+  sha256: string
+  createdAt: string
+}
+
+/** 報告參考檔允許的類型（PDF、TXT、MD、CSV、XLSX、PNG、JPEG） */
+export type ReportInputMime =
+  | 'application/pdf'
+  | 'text/plain'
+  | 'text/markdown'
+  | 'text/csv'
+  | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  | 'image/png'
+  | 'image/jpeg'
+
+/** POST／GET /api/reports/<code>/inputs 的一筆（登入權杖只看得到自己上傳的） */
+export interface ReportInput extends ReportInputRef {
+  code: string
+  /** 'u:<帳號 id>'（帳號上傳）或 'pipeline'（報告管線） */
+  createdBy: string
+  /** 已被報告引用：不能刪（DELETE 回 409 INPUT_LOCKED） */
+  locked: boolean
 }
 
 export type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'

@@ -19,6 +19,8 @@
 //      不打網路；有就帶 ?v=<雜湊> 抓一次，同一個批次之後直接回記憶體，換批次才重抓。內容形狀由批次交付方決定，用前自己檢查。
 //   9. 新聞與報告：news() 後端代抓 Google 新聞（瀏覽器可留 5 分鐘）；reports()／report() 讀報告 metadata（檔案只有外部連結）。
 //      requestReport()／reportRequests() 只限登入（沒登入丟 401 UNAUTHENTICATED、不打網路）；報告由外部管線產生，不要輪詢進度。
+//  10. 報告參考檔（2026-10-28）：reportInputs.upload／list／download／remove 只限登入（沒登入丟 401、不打網路）。
+//      upload 在瀏覽器算 SHA-256、依副檔名決定 Content-Type（不靠瀏覽器猜），本文是檔案原始位元組；只看得到自己上傳的。
 //
 // 用法：
 //   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE, token: import.meta.env.VITE_KUPEI_TOKEN })
@@ -40,6 +42,8 @@
 //   const { items, stale } = await kupei.news({ q: ['台積電', '2330'], exclude: ['廣告'], days: 3 })
 //   const reports = await kupei.reports('2330')           // 列表（不含 summary）；kupei.report('2330', '2026Q2', 1) 含 summary
 //   await kupei.requestReport('2330', '2026Q2')           // 登入後才能送；進度看 kupei.reportRequests('2330')
+//   const input = await kupei.reportInputs.upload('2330', file)   // <input type="file"> 的 File；≤ 20 MiB、pdf/txt/md/csv/xlsx/png/jpg
+//   const blob = await kupei.reportInputs.download('2330', input.id)   // 只限自己上傳的；kupei.reportInputs.remove(...) 刪除
 import type {
   ApiErrorBody,
   AuthConfig,
@@ -65,6 +69,8 @@ import type {
   RawSummary,
   Report,
   ReportMeta,
+  ReportInput,
+  ReportInputMime,
   ReportRequest,
   ReportRequestCreated,
   ResetPasswordBody,
@@ -216,6 +222,27 @@ function sameBatch(a: Manifest, b: Manifest): boolean {
   return a.run === b.run && a.published_at === b.published_at && JSON.stringify(a.hashes) === JSON.stringify(b.hashes)
 }
 
+/** 報告參考檔單檔上限（同後端） */
+export const MAX_INPUT_BYTES = 20 * 1024 * 1024
+
+/** 副檔名 → 上傳時的 Content-Type（同後端白名單；不在表上＝不支援） */
+export const INPUT_MIME_BY_EXT: Readonly<Record<string, ReportInputMime>> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+}
+
+/** 檔名 → Content-Type；不支援的副檔名回 null */
+export function inputMimeOf(fileName: string): ReportInputMime | null {
+  const m = /\.([A-Za-z0-9]+)$/.exec(fileName.trim())
+  return (m && INPUT_MIME_BY_EXT[(m[1] ?? '').toLowerCase()]) || null
+}
+
 export function createKupeiClient(cfg: KupeiConfig) {
   const base = cfg.baseUrl.replace(/\/+$/, '')
   const doFetch = cfg.fetch ?? fetch
@@ -273,6 +300,11 @@ export function createKupeiClient(cfg: KupeiConfig) {
     anonymous?: boolean
     /** 指定要用的權杖（登出時用當下的登入權杖） */
     token?: string
+    /** 原始本文（報告參考檔上傳）：不轉 JSON，Content-Type 等由 headers 給 */
+    raw?: Blob | ArrayBuffer
+    headers?: Record<string, string>
+    /** 成功時回 Blob（下載），不解析 JSON */
+    blob?: boolean
   }
 
   async function get<T>(path: string, opts: GetOpts = {}): Promise<T> {
@@ -284,14 +316,16 @@ export function createKupeiClient(cfg: KupeiConfig) {
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(opts.headers ?? {}),
       },
       cache: opts.cache ?? 'default',
       signal,
     }
     if (opts.body !== undefined) init.body = JSON.stringify(opts.body)
+    if (opts.raw !== undefined) init.body = opts.raw
     if (opts.low) init.priority = 'low'
     const res = await doFetch(base + path, init)
-    if (res.ok) return (await res.json()) as T
+    if (res.ok) return (opts.blob ? await res.blob() : await res.json()) as T
     let e: Partial<ApiErrorBody['error']> = {}
     try {
       const body = await res.json()
@@ -316,6 +350,14 @@ export function createKupeiClient(cfg: KupeiConfig) {
     }
     throw err
   }
+
+  /** 報告參考檔要登入：沒登入丟 401、不打網路 */
+  function requireSession(): StoredSession {
+    const s = liveSession()
+    if (!s) throw new KupeiError(401, 'UNAUTHENTICATED', '還沒登入', null)
+    return s
+  }
+  const inputsPath = (code: string) => `/api/reports/${encodeURIComponent(code)}/inputs`
 
   const loadManifest = () => get<Manifest>('/data/manifest.json', { cache: 'no-cache' })
 
@@ -692,6 +734,52 @@ export function createKupeiClient(cfg: KupeiConfig) {
       const s = liveSession()
       if (!s) throw new KupeiError(401, 'UNAUTHENTICATED', '還沒登入', null)
       return (await get<{ requests: ReportRequest[] }>(`/api/reports/${encodeURIComponent(code)}/requests`, { cache: 'no-store', token: s.token })).requests
+    },
+
+    // ── 報告參考檔（2026-10-28）：只限登入；只看得到、下載、刪除自己上傳的 ──
+    reportInputs: {
+      /** 自己在這家公司上傳的參考檔（新→舊，不含已刪除） */
+      async list(code: string): Promise<ReportInput[]> {
+        const s = requireSession()
+        return (await get<{ inputs: ReportInput[] }>(inputsPath(code), { cache: 'no-store', token: s.token })).inputs
+      },
+
+      /**
+       * 上傳一個檔（<input type="file"> 的 File，或 Blob＋檔名）。允許 pdf、txt、md、csv、xlsx、png、jpg／jpeg，≤ 20 MiB；
+       * 副檔名、內容（檔頭；文字檔要 UTF-8）不對 415 UNSUPPORTED_TYPE、太大 413 TOO_LARGE、每人超過 50 個或 200 MiB 413 QUOTA_EXCEEDED。
+       * 在瀏覽器算 SHA-256 帶在 X-Content-SHA256（伺服器交給 R2 驗證，傳壞了 400 CHECKSUM_MISMATCH，重傳即可）。
+       * 上傳不是 GET，被限流（429）不會自動重試。
+       */
+      async upload(code: string, file: Blob, name?: string): Promise<ReportInput> {
+        const s = requireSession()
+        const fileName = name ?? (file as Blob & { name?: string }).name
+        if (!fileName) throw new KupeiError(400, 'BAD_REQUEST', '缺少檔名', null)
+        const mime = inputMimeOf(fileName)
+        if (!mime) throw new KupeiError(415, 'UNSUPPORTED_TYPE', '只接受 pdf、txt、md、csv、xlsx、png、jpg、jpeg', null)
+        if (file.size > MAX_INPUT_BYTES) throw new KupeiError(413, 'TOO_LARGE', '單檔上限 20 MiB', null)
+        const bytes = await file.arrayBuffer()
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+        const sha256 = [...digest].map((b) => b.toString(16).padStart(2, '0')).join('')
+        return get<ReportInput>(`${inputsPath(code)}?name=${encodeURIComponent(fileName)}`, {
+          method: 'POST',
+          raw: bytes,
+          headers: { 'Content-Type': mime, 'X-Content-SHA256': sha256 },
+          cache: 'no-store',
+          token: s.token,
+        })
+      },
+
+      /** 下載（回 Blob；要存檔就用 URL.createObjectURL 搭配 <a download>）。不是自己的或不存在 404 */
+      async download(code: string, id: string): Promise<Blob> {
+        const s = requireSession()
+        return get<Blob>(`${inputsPath(code)}/${encodeURIComponent(id)}`, { cache: 'no-store', token: s.token, blob: true })
+      },
+
+      /** 刪除（R2 物件立即刪掉，無法復原）。已被報告引用 409 INPUT_LOCKED；不是自己的或不存在 404 */
+      async remove(code: string, id: string): Promise<{ status: 'ok' }> {
+        const s = requireSession()
+        return get<{ status: 'ok' }>(`${inputsPath(code)}/${encodeURIComponent(id)}`, { method: 'DELETE', cache: 'no-store', token: s.token })
+      },
     },
 
     store: {
