@@ -128,7 +128,7 @@ await check('休市日：phase=OPEN、stale、快照是前一天 → 退回收�
   const p = await open('#/stock/2330/home'); await p.waitForTimeout(1200)
   const lbl = await p.innerText('#h-upd')
   must(/收盤價/.test(lbl) && !/盤中/.test(lbl), '標示：' + lbl)
-  must((await p.innerText('#s-val .k')).trim() === '收盤價', '價格欄名稱應為「收盤價」')
+  must((await p.innerText('#s-val .k')).trim() === '成交價', '價格欄名稱依規格 B2 固定為「成交價」')
   must(!(await p.innerText('#s-valcard')).includes('1,234.5'), '不該用前一天的盤中快照價格')
   await go(p, '', 800)
   must(await p.isHidden('#h-alert'), '休市日不該出現盤中延遲警示')

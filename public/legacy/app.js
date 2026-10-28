@@ -26,7 +26,7 @@ var H=S.head, MJ=S.majors;
 /* Pages 部署（2026-10-26）：前端在 GitHub Pages，資料來自後端 Server API；自選與設定存本機、登入後依帳號同步；沒有的功能顯示「尚未提供」 */
 var PAGES=!!(window.KUPEI_CONFIG&&window.KUPEI_CONFIG.mode==='pages');
 var OFFZH='此功能尚未提供（後端未承接，待確認）。';
-var PXL=PAGES?'收盤價':'成交價'; /* Pages 版行情是每日收盤，不是即時成交價 */
+var PXL='成交價'; /* 欄位名稱依 UI 規格 B2／答 6 固定為「成交價」；Pages 版價格是每日收盤或盤中快照，由旁邊的標示線說明（收盤價 M/D・非即時／盤中 HH:MM）。tooltip 用 pxWord() 說明實際是哪一種 */
 var COLORS=['#FDC04E','#4D9BE0','#F9827F','#B79CFF','#3FC1C9'];
 var MAJ=MJ.map(function(m){return m.en;});
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
@@ -308,8 +308,9 @@ function doImport(){
 var QT={on:false,st:null,map:{},last:null,tdate:null,dates:null,seq:0,es:null,fails:0,poll:null,t:null,v:0,intra:null,it:null}; /* intra：Pages 盤中快照 {stale,ttl,hm}，收盤／盤前為 null */ /* v：行情版本，畫面快取比對用 */
 var VAL={on:false,map:{},date:null,limitations:[]};
 function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};QT.intra=s.intraday||null;QT.src=s.source||null;EX.stale=QT.st==='DELAYED'||!!(QT.intra&&QT.intra.stale);if(PAGES){var L=pxLabel();JX0[0][1]=JXW[0][1]=WFX[0][0]=L;}qtSchedule();}
-/* 價格欄名稱：Pages 盤中顯示「盤中價」，其餘照 PXL（收盤價／成交價） */
-function pxLabel(){return PAGES&&QT.intra?'盤中價':PXL;}
+/* 價格欄名稱：一律「成交價」（規格 B2）；實際是收盤價或盤中快照，另用 pxWord() 在滑鼠提示中說明 */
+function pxLabel(){return PXL;}
+function pxWord(){return PAGES?(QT.intra?'盤中快照價':'收盤價'):'成交價';}
 /* 收盤資料來源（K-30，條款要求）：任一市場的最新收盤來自 FinMind 就標示 */
 function fmSrc(){var s=(typeof QT!=='undefined'&&QT.src)||(STAT.quotes&&STAT.quotes.source)||{};return s.L==='finmind'||s.O==='finmind';}
 function qtMerge(ev){QT.v++;var q=ev.quotes||{};Object.keys(q).forEach(function(k){QT.map[k]=q[k];});QT.seq=Math.max(QT.seq,ev.seq||0);QT.last=new Date().toISOString();}
@@ -919,9 +920,9 @@ function sValRender(id){
   if(r.fin&&(o.flags||[]).indexOf('FINANCIAL_SECTOR')<0&&rc.indexOf('FINANCIAL_SECTOR')<0)f.push('<span class="flag">'+esc(tr1('FINANCIAL_SECTOR'))+'</span>');
   var bf=(o.flags||[]).filter(function(c){return rc.indexOf(c)<0;}),seen={};
   if(VAL.on&&o.vst==='OK'&&o.price!=null){var pos=o.price<o.min?'低於下限':o.price<o.typ?'下限–中心':o.price<o.max?'中心–上限':'高於上限';
-    f.push('<span class="flag" title="'+esc(pxLabel()+' '+fmt(o.price)+'；估價下限 '+fmt(o.min)+'、中心 '+fmt(o.typ)+'、上限 '+fmt(o.max)+'、數據上限 '+fmt(o.cap))+'">股價位置：'+pos+'</span>');
+    f.push('<span class="flag" title="'+esc(pxWord()+' '+fmt(o.price)+'；估價下限 '+fmt(o.min)+'、中心 '+fmt(o.typ)+'、上限 '+fmt(o.max)+'、數據上限 '+fmt(o.cap))+'">股價位置：'+pos+'</span>');
     /* 後端旗標已有「價格高於資料支持上限」就以後端為準，不再重複 */
-    if(o.cap!=null&&o.price>o.cap&&bf.indexOf('PRICE_ABOVE_DATA_SUPPORT')<0){var t0=tr1('PRICE_ABOVE_DATA_SUPPORT');seen[t0]=1;f.push('<span class="flag" title="'+esc(pxLabel()+' '+fmt(o.price)+' 高於數據上限 '+fmt(o.cap))+'">'+esc(t0)+'</span>');}}
+    if(o.cap!=null&&o.price>o.cap&&bf.indexOf('PRICE_ABOVE_DATA_SUPPORT')<0){var t0=tr1('PRICE_ABOVE_DATA_SUPPORT');seen[t0]=1;f.push('<span class="flag" title="'+esc(pxWord()+' '+fmt(o.price)+' 高於數據上限 '+fmt(o.cap))+'">'+esc(t0)+'</span>');}}
   bf.forEach(function(c){var t=tr1(c);if(seen[t])return;seen[t]=1;f.push('<span class="flag" title="'+esc(c)+'">'+esc(t)+'</span>');});
   if(!VAL.on)f.push('<span class="placeholder">估價尚未提供。</span>');else if(o.vst&&o.vst!=='OK')f.push('<span class="placeholder" title="'+esc(o.vst)+'">此公司估價'+(o.vst==='PARTIAL'?'只提供中心值，不提供上下限與數據上限':o.vst==='NOT_APPLICABLE'?'不適用':'不可得')+(rc.length?'：'+trHtml(rc):'')+'。</span>');
   if(!QT.on)f.push('<span class="placeholder">行情尚未接上。</span>');else if(VAL.on)f.push('<span class="placeholder">安全邊際依'+(PAGES?'最近收盤價':'即時股價')+'計算，與規格書以估價基準日收盤價計算的數值不同。</span>');

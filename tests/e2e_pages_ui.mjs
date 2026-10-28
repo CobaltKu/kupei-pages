@@ -54,22 +54,22 @@ await check('手機排序：所有選項（含安全邊際）不報錯、會重�
   await p.context().close(); return opts.length + ' 個選項'
 })
 
-/* 3. 盤中 → 收盤：價格欄名稱、手機排序選單跟著改回「收盤價」 */
-await check('盤中轉收盤：桌機表頭與手機排序選單從「盤中價」改回「收盤價」', async () => {
+/* 3. 盤中 → 收盤：價格欄名稱（桌機表頭、手機排序選單）依規格 B2 一直是「成交價」，只有標示線改成「收盤價」 */
+await check('盤中轉收盤：桌機表頭與手機排序選單維持「成交價」，標示線改回收盤價', async () => {
   const out = []
   for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     M.intraday = OPEN
     const p = await open('', vp, true); await p.waitForTimeout(1500)
     const mob = vp.width < 720
     const label = () => mob ? p.$eval('#h-msort option[value="price"]', (x) => x.textContent) : p.$eval('#h-head [data-sort="price"]', (x) => x.textContent)
-    must(/盤中價/.test(await label()), (mob ? '手機' : '桌機') + '盤中時應為「盤中價」：' + await label())
+    must(/成交價/.test(await label()), (mob ? '手機' : '桌機') + '盤中時應為「成交價」：' + await label())
     M.intraday = CLOSED
     await p.clock.fastForward(301000); await p.waitForTimeout(2000)
     must(/收盤價/.test(await p.innerText('#h-upd')), '行情標示沒有改回收盤價')
-    const l2 = await label(); must(/收盤價/.test(l2) && !/盤中價/.test(l2), (mob ? '手機排序選單' : '桌機表頭') + '仍是：' + l2)
+    const l2 = await label(); must(/成交價/.test(l2) && !/盤中價|收盤價/.test(l2), (mob ? '手機排序選單' : '桌機表頭') + '應為「成交價」：' + l2)
     if (!mob) { // 到別頁再回首頁，表頭仍正確
       await go(p, '#/status', 800); await go(p, '#/home', 1500)
-      const l3 = await label(); must(/收盤價/.test(l3), '回首頁後表頭：' + l3)
+      const l3 = await label(); must(/成交價/.test(l3), '回首頁後表頭：' + l3)
     }
     out.push((mob ? '手機 ' : '桌機 ') + l2.replace(/[▲▼]/g, '').replace('排序：', ''))
     await p.context().close()
