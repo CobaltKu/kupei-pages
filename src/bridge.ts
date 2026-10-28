@@ -2,7 +2,7 @@
  * KuPei Pages 前端橋接層（2026-10-26）。
  * 完整 UI（public/legacy/app.js，來自 Python/kupei_3/ui_web）原本讀私人 API /api/v1；Pages 版改讀後端 Server API：
  *   評分與明細  /data/<run>/…（summary、details、tr、vparams，選用 valuation、help）
- *   行情        /api/market/latest、/api/market/history（每日收盤）；/api/market/intraday（盤中快照，約 10 分鐘更新）
+ *   行情        /api/market/latest、/api/market/history（每日收盤）；/api/market/intraday（盤中快照，約 10 分鐘更新）；/api/market/live（FinMind 盤中價，登入後約 30 秒，見 liveTick）
  *   新聞        /api/news、/api/news/sources（Google 新聞 RSS，關鍵字來自本機新聞設定）
  *   報告        /api/reports/<代號>…（列表、單篇、產生請求；請求只限登入帳號）
  *   帳號與同步  /api/auth/*、/api/store/<key>（依帳號分開的雲端文件）
@@ -284,8 +284,29 @@ function snapshotDay(intra: Intraday): string | null {
   return days.sort().pop() ?? null
 }
 let mergedMemo: { latest: LatestResponse; intra: unknown; out: Json } | null = null
-function adaptQuotesLive(latest: LatestResponse, intra: Intraday | null): Json {
+let finmindMemo: { latest: LatestResponse; live: LiveView; out: Json } | null = null
+function adaptQuotesLive(latest: LatestResponse, intra: Intraday | null, live: LiveView | null = null): Json {
   const base = adaptQuotes(latest)
+  // FinMind 盤中價（登入後約 30 秒更新）：有就優先用，盤中快照（MIS）不看
+  if (live) {
+    if (finmindMemo && finmindMemo.latest === latest && finmindMemo.live === live) return finmindMemo.out
+    const quotes: Json = { ...base.quotes }
+    for (const [id, t] of Object.entries(live.quotes)) {
+      if (!/^\d{4}$/.test(id) || !Array.isArray(t)) continue
+      const price = num(t[0]), change = num(t[1]), volume = num(t[2])
+      const prev = price != null && change != null ? price - change : null
+      quotes[id] = {
+        price, prev_close: prev, change, change_pct: prev ? (change! / prev) * 100 : null, volume,
+        status: 'LIVE', source_time: typeof t[3] === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(t[3]) ? t[3] : null,
+      }
+    }
+    const out = {
+      ...base, market_status: 'OPEN', last_success_at: live.at, seq: 0, quotes, intraday: null,
+      live: { source: 'finmind', hms: live.hms, at: live.at, interval: live.interval },
+    }
+    finmindMemo = { latest, live, out }
+    return out
+  }
   if (!intra || intra.phase !== 'OPEN') return base
   if (intra.stale && snapshotDay(intra) !== taipeiToday()) return base // 休市日或還沒有今天的快照：前一天的快照不當盤中價
   if (mergedMemo && mergedMemo.latest === latest && mergedMemo.intra === intra) return mergedMemo.out
@@ -470,6 +491,132 @@ async function marketIntraday(): Promise<Intraday | null> {
   }
   intraMemo.set(v, out)
   return out
+}
+
+/* ---- FinMind 盤中即時價（/api/market/live，2026-10-28 使用者決定；登入權杖才能讀） ----
+ * 規則：登入後、phase=OPEN（還不知道 phase 時先試一次）、分頁可見時每 intervalSeconds（30 秒）讀一次；
+ * 分頁隱藏不讀，回來立刻補一次；PRE／CLOSED 改每 10 分鐘檢查一次；同一時間只有一個請求；
+ * 429 依 Retry-After（讀不到 30 秒）等；其他失敗 30 秒起加倍、最多 10 分鐘（連續失敗不加快）。
+ * 有資料且 stale=false（phase=OPEN）→ 價格用 FinMind；stale、503、斷線、starter 還沒有 marketLive → 退回盤中快照（MIS）。
+ * 價格更新時發 'kupei:live' 事件，app.js 只重讀 /quotes、更新價格欄（不整頁重畫）。登出或登入失效時停止並清掉資料。
+ */
+/** /api/market/live 的回應。starter 同步後改用 kupei-types 的 LiveQuotes */
+interface LiveQuotesLocal {
+  source: 'finmind'
+  phase: 'PRE' | 'OPEN' | 'CLOSED'
+  at: string
+  fetchedAt: string
+  stale: boolean
+  intervalSeconds: number
+  quotes: Record<string, [number | null, number | null, number | null, string]>
+}
+/** 驗證過、可以顯示的 FinMind 資料（只有 phase=OPEN 且 stale=false 才會有） */
+interface LiveView { at: string | null; hms: string | null; interval: number; quotes: Record<string, unknown> }
+const LIVE_CLOSED_MS = 600_000
+const LIVE = {
+  started: false, stopped: false, off: false, busy: false, pending: false,
+  phase: null as LiveQuotesLocal['phase'] | null,
+  data: null as LiveView | null,
+  interval: 30, fails: 0, until: 0, lastTry: 0, timer: 0,
+  first: null as Promise<void> | null,
+}
+/** starter 同步前 kupei-client 沒有 marketLive：沒有就當不可用（走 MIS） */
+function liveFn(): (() => Promise<LiveQuotesLocal>) | null {
+  const f = (client as unknown as { marketLive?: () => Promise<LiveQuotesLocal> }).marketLive
+  return typeof f === 'function' ? () => f.call(client) : null
+}
+function taipeiHms(x: string | null): string | null {
+  const t = x ? Date.parse(x) : NaN
+  return Number.isNaN(t) ? null : new Date(t + 8 * 3600e3).toISOString().slice(11, 19)
+}
+/** 回應結構不對＝當成失敗 */
+function cleanLive(v: unknown): { phase: LiveQuotesLocal['phase']; stale: boolean; view: LiveView } | null {
+  if (!isObj(v) || v.source !== 'finmind' || !['PRE', 'OPEN', 'CLOSED'].includes(v.phase) || !isObj(v.quotes)) return null
+  const at = isoOrNull(v.at)
+  const iv = num(v.intervalSeconds)
+  return { phase: v.phase, stale: v.stale !== false, view: { at, hms: taipeiHms(at), interval: iv && iv >= 30 && iv <= 300 ? Math.round(iv) : 30, quotes: v.quotes } }
+}
+function liveSet(d: LiveView | null) {
+  const prev = LIVE.data
+  // 同一個資料時間就沿用舊物件：/quotes 的轉換結果與 app.js 的比對都不變，不重畫
+  if (d && prev && d.at === prev.at && d.at) return
+  if (!d && !prev) return
+  LIVE.data = d
+  window.dispatchEvent(new Event('kupei:live'))
+}
+function liveSchedule(ms: number) {
+  window.clearTimeout(LIVE.timer)
+  LIVE.timer = window.setTimeout(() => { LIVE.timer = 0; void liveTick() }, ms)
+}
+async function liveTick(): Promise<void> {
+  if (LIVE.stopped || LIVE.off || LIVE.busy) return
+  if (!client.getSession()) return liveStop()
+  if (document.visibilityState !== 'visible') { LIVE.pending = true; return } // 回到分頁時補
+  const fn = liveFn()
+  if (!fn) { LIVE.off = true; return liveSet(null) }
+  LIVE.busy = true
+  LIVE.pending = false
+  LIVE.lastTry = Date.now()
+  let next = 30_000
+  try {
+    const d = cleanLive(await fn())
+    if (LIVE.stopped) return
+    if (!d) throw new Error('bad live response')
+    LIVE.fails = 0
+    LIVE.phase = d.phase
+    LIVE.interval = d.view.interval
+    liveSet(d.phase === 'OPEN' && !d.stale ? d.view : null)
+    next = d.phase === 'OPEN' ? d.view.interval * 1000 : LIVE_CLOSED_MS
+  } catch (e) {
+    if (LIVE.stopped) return
+    liveSet(null)
+    if (e instanceof KupeiError && e.status === 401) return liveStop() // starter 已清 session → lockOut
+    if (e instanceof KupeiError && (e.code === 'FORBIDDEN' || e.status === 404)) { LIVE.off = true; return } // 後端沒有這個端點
+    if (e instanceof KupeiError && e.status === 429) {
+      next = Math.max(30, e.retryAfter ?? 30) * 1000
+      LIVE.until = Date.now() + next
+    } else {
+      LIVE.fails++
+      next = Math.min(LIVE_CLOSED_MS, 30_000 * 2 ** (LIVE.fails - 1))
+    }
+    if (LIVE.phase === 'PRE' || LIVE.phase === 'CLOSED') next = Math.max(next, LIVE_CLOSED_MS)
+  } finally {
+    LIVE.busy = false
+  }
+  if (!LIVE.stopped) liveSchedule(next)
+}
+function liveStart() {
+  if (LIVE.started || LIVE.stopped) return
+  LIVE.started = true
+  LIVE.first = liveTick()
+}
+/** 登出、登入失效：停止輪詢並清掉 FinMind 資料 */
+function liveStop() {
+  LIVE.stopped = true
+  window.clearTimeout(LIVE.timer)
+  LIVE.timer = 0
+  LIVE.data = null
+  finmindMemo = null
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !LIVE.started || LIVE.stopped || LIVE.off || LIVE.busy) return
+  const now = Date.now()
+  if (now < LIVE.until) { if (LIVE.pending) liveSchedule(LIVE.until - now); return } // 429：等到期
+  if (LIVE.pending) return void liveTick() // 隱藏期間該讀沒讀：立刻補
+  // 盤中、沒有在失敗退避：回來立刻補一次；PRE／CLOSED 照 10 分鐘的計時器
+  if (LIVE.phase !== 'PRE' && LIVE.phase !== 'CLOSED' && !LIVE.fails && now - LIVE.lastTry >= 5000) { window.clearTimeout(LIVE.timer); void liveTick() }
+})
+/** 第一次讀 FinMind（最多等 1.5 秒，讓第一次畫面就用 FinMind 價格） */
+function liveFirst(): Promise<unknown> {
+  return LIVE.first ? Promise.race([LIVE.first, new Promise((r) => window.setTimeout(r, 1500))]) : Promise.resolve()
+}
+/** FinMind 有資料時，每日收盤沿用手上那份（最多 10 分鐘），不跟著 30 秒重讀 /api/market/latest */
+let latestHeld: { at: number; v: LatestResponse } | null = null
+async function latestForQuotes(): Promise<LatestResponse> {
+  if (LIVE.data && latestHeld && Date.now() - latestHeld.at < LIVE_CLOSED_MS) return latestHeld.v
+  const v = await client.marketLatest()
+  if (!latestHeld || latestHeld.v !== v) latestHeld = { at: Date.now(), v }
+  return v
 }
 
 /** 'HH:MM:SS' 或 ISO 時間 → 台灣時間 HH:MM */
@@ -792,8 +939,12 @@ async function req(method: string, path: string, body?: unknown, headers?: Recor
   const seg = p.split('/').map((s) => { try { return decodeURIComponent(s) } catch { return '' } })
   try {
     if (m === 'GET' && p === '/quotes') {
-      const [latest, intra] = await Promise.all([client.marketLatest(), marketIntraday()])
-      return ok(adaptQuotesLive(latest, intra))
+      // FinMind 有資料就不讀盤中快照；沒有（或第一次還沒回來）時與收盤並行讀，退回 MIS 不多等
+      const pre = LIVE.data ? null : marketIntraday()
+      const [latest] = await Promise.all([latestForQuotes(), liveFirst()])
+      const live = LIVE.data
+      const intra = live ? null : await (pre ?? marketIntraday())
+      return ok(adaptQuotesLive(latest, intra, live))
     }
     // 新聞：關鍵字來自本機新聞設定；產業依 span（1／3 天），個股固定近 5 日。date 參數後端不支援，忽略
     if (m === 'GET' && p === '/news/industry') {
@@ -1197,6 +1348,7 @@ async function submitGate() {
 
 /** 已登入時登出或權杖失效：重新載入回到登入畫面（記憶體裡的資料、畫面都清掉） */
 function lockOut() {
+  liveStop()
   frozen = true
   window.clearTimeout(pushTimer)
   acctOpen = false
@@ -1409,6 +1561,7 @@ document.addEventListener('click', (e) => {
     if (loggingOut) return
     // meta.owner 保留：下次別的帳號登入時才知道本機資料是誰的。等後端作廢權杖（失敗也沒關係）後重新載入，回到登入畫面
     loggingOut = true
+    liveStop()
     void client.auth.logout().finally(() => location.reload())
   }
 })
@@ -1494,6 +1647,7 @@ async function startApp() {
   uiStarted = true
   void loadDs().catch(() => {}) // 與 UI 啟動並行
   void client.marketLatest().catch(() => {})
+  liveStart() // FinMind 盤中價（starter 沒有 marketLive 時不發請求、走 MIS）
   const s = document.createElement('script')
   s.src = `./legacy/app.js?v=${__BUILD__}`
   document.body.appendChild(s)

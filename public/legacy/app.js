@@ -305,14 +305,14 @@ function doImport(){
 }
 
 /* ================= 行情（T4：每 30 秒抓取＋SSE；I6） ================= */
-var QT={on:false,st:null,map:{},last:null,tdate:null,dates:null,seq:0,es:null,fails:0,poll:null,t:null,v:0,intra:null,it:null}; /* intra：Pages 盤中快照 {stale,ttl,hm}，收盤／盤前為 null */ /* v：行情版本，畫面快取比對用 */
+var QT={on:false,st:null,map:{},last:null,tdate:null,dates:null,seq:0,es:null,fails:0,poll:null,t:null,v:0,intra:null,it:null,live:null}; /* live：Pages FinMind 盤中價 {hms,at,interval}（登入後約 30 秒，橋接層輪詢），沒有時為 null */ /* intra：Pages 盤中快照 {stale,ttl,hm}，收盤／盤前為 null */ /* v：行情版本，畫面快取比對用 */
 var VAL={on:false,map:{},date:null,limitations:[]};
-function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};QT.intra=s.intraday||null;QT.src=s.source||null;EX.stale=QT.st==='DELAYED'||!!(QT.intra&&QT.intra.stale);if(PAGES){var L=pxLabel();JX0[0][1]=JXW[0][1]=WFX[0][0]=L;}qtSchedule();}
+function qtApply(s){QT.v++;QT.on=true;QT.st=s.market_status;QT.last=s.last_success_at;QT.tdate=s.trading_date;QT.dates=s.dates||null;QT.seq=s.seq||0;QT.map=s.quotes||{};QT.intra=s.intraday||null;QT.live=s.live||null;QT.src=s.source||null;EX.stale=QT.st==='DELAYED'||!!(QT.intra&&QT.intra.stale);if(PAGES){var L=pxLabel();JX0[0][1]=JXW[0][1]=WFX[0][0]=L;}qtSchedule();}
 /* 價格欄名稱：一律「成交價」（規格 B2）；實際是收盤價或盤中快照，另用 pxWord() 在滑鼠提示中說明 */
 function pxLabel(){return PXL;}
-function pxWord(){return PAGES?(QT.intra?'盤中快照價':'收盤價'):'成交價';}
-/* 收盤資料來源（K-30，條款要求）：任一市場的最新收盤來自 FinMind 就標示 */
-function fmSrc(){var s=(typeof QT!=='undefined'&&QT.src)||(STAT.quotes&&STAT.quotes.source)||{};return s.L==='finmind'||s.O==='finmind';}
+function pxWord(){return PAGES?(QT.live?'FinMind 盤中價':QT.intra?'證交所盤中快照價':'收盤價'):'成交價';}
+/* 資料來源 FinMind（K-30，條款要求）：顯示 FinMind 盤中價，或任一市場的最新收盤來自 FinMind 就標示 */
+function fmSrc(){if(typeof QT!=='undefined'&&QT.live)return true;var s=(typeof QT!=='undefined'&&QT.src)||(STAT.quotes&&STAT.quotes.source)||{};return s.L==='finmind'||s.O==='finmind';}
 function qtMerge(ev){QT.v++;var q=ev.quotes||{};Object.keys(q).forEach(function(k){QT.map[k]=q[k];});QT.seq=Math.max(QT.seq,ev.seq||0);QT.last=new Date().toISOString();}
 function qtRefresh(){KupeiAPI.req('GET','/quotes').then(function(r){if(r.ok&&!qtSame(r.data)){qtApply(r.data);quotesChanged();}else qtSchedule();},function(){qtSchedule();});}
 /* Pages 盤中（2026-10-27）：後端每 ttlSeconds（約 10 分鐘）更新一次盤中快照，所以只有盤中（phase=OPEN）且分頁可見時，
@@ -331,6 +331,8 @@ function qtStream(){
 function qtSame(s){return QT.on&&s&&s.last_success_at===QT.last&&s.trading_date===QT.tdate&&(s.seq||0)===QT.seq&&s.quotes===QT.map;}
 function qtStart(){KupeiAPI.req('GET','/quotes').then(function(r){if(!r.ok){QT.on=false;updLine();return;}if(!qtSame(r.data)){qtApply(r.data);quotesChanged();}else updLine();if(!PAGES)qtStream(); /* Pages 版：行情一天只更新幾次，不輪詢（串接規範 §4），回到分頁時才刷新 */},function(){updLine();});}
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&QT.on)qtRefresh();});
+/* Pages：橋接層的 FinMind 盤中價更新（約 30 秒）或改回證交所快照時通知；只重讀 /quotes、更新價格欄 */
+window.addEventListener('kupei:live',function(){if(PAGES)qtRefresh();});
 function vaApply(d){QT.v++;VAL.on=true;VAL.date=d.valuation_date;VAL.map=d.companies||{};VAL.limitations=d.dataset_limitations||[];Object.keys(d.translations||{}).forEach(function(k){TR[k]=d.translations[k];});}
 /* 啟動時已趕上（SB.val）就不再讀；晚到的才重畫目前頁面（status() 不再等估價下載：狀態頁的基準日在這裡補上） */
 function vaStart(){if(VAL.on)return;KupeiAPI.req('GET','/valuation').then(function(r){if(!r.ok||VAL.on)return;vaApply(r.data);quotesChanged(true);if(curPage==='status')stRender();});}
@@ -338,11 +340,16 @@ function hm(iso){if(!iso)return '—';var d=new Date(iso);return isNaN(d)?'—':
 function md(s){if(!s)return '—';var p=String(s).slice(0,10).split('-');return p.length===3?(+p[1])+'/'+(+p[2]):s;}
 function qtLabel(){
   if(!QT.on)return '行情：尚未接上';
+  if(QT.live){
+    /* Pages FinMind 盤中價（登入後約 30 秒更新）；條款要求標示資料來源 */
+    var sec=QT.live.interval||30;
+    return '<span id="h-live" title="FinMind 盤中價，約每 '+sec+' 秒更新">FinMind・'+(QT.live.hms?esc(QT.live.hms):'—')+'（約 '+sec+' 秒更新）・資料來源：FinMind</span>';
+  }
   if(QT.intra){
-    /* Pages 盤中快照：約 ttl 秒更新一次，不是逐筆即時；stale＝後端快照超過預期時間沒更新，價格仍顯示 */
-    var mins=Math.max(1,Math.round((QT.intra.ttl||300)/60)),at=QT.intra.hm?esc(QT.intra.hm):'—';
-    if(QT.intra.stale)return '<span style="color:var(--warn)" title="後端盤中快照超過預期時間沒有更新，價格停在最後一次快照">⚠ 盤中資料延遲｜最後更新 '+at+'</span>';
-    return '<span title="盤中快照，約每 '+mins+' 分鐘更新，非逐筆即時">盤中 '+at+'（約 '+mins+' 分鐘更新）</span>';
+    /* Pages 證交所 MIS 盤中快照（FinMind 拿不到時的備援）：後端約 10 分鐘收一次，不是逐筆即時；stale＝快照超過預期時間沒更新，價格仍顯示 */
+    var at=QT.intra.hm?esc(QT.intra.hm):'—';
+    if(QT.intra.stale)return '<span style="color:var(--warn)" title="證交所盤中快照超過預期時間沒有更新，價格停在最後一次快照">⚠ 證交所・盤中資料延遲｜最後更新 '+at+'</span>';
+    return '<span title="證交所盤中快照，約 10 分鐘更新一次，非逐筆即時">證交所・約 10 分鐘延遲・'+at+'</span>';
   }
   if(QT.st==='CLOSED'){
     /* Pages：每日收盤（非即時）；上市（L）、上櫃（O）收盤日不同時兩個都標 */
@@ -352,12 +359,12 @@ function qtLabel(){
   if(QT.st==='DELAYED')return '<span style="color:var(--warn)">⚠ 行情延遲｜最後更新 '+hm(QT.last)+'</span>';
   return '成交價 '+hm(QT.last)+'｜FinMind';
 }
-function updLine(){$('h-upd').innerHTML=qtLabel();var ia=QT.on&&!!(QT.intra&&QT.intra.stale),al=QT.on&&QT.st==='DELAYED'||ia;$('h-alert').hidden=!al;if(ia)$('h-alert').textContent='盤中資料延遲：後端盤中快照超過預期時間沒有更新，價格與安全邊際停在 '+(QT.intra.hm||'—')+'；恢復後自動更新。';else if(al)$('h-alert').textContent='行情延遲：超過 2 分鐘沒有新資料，成交價與安全邊際停在 '+hm(QT.last)+'；恢復後自動更新。';}
+function updLine(){$('h-upd').innerHTML=qtLabel();if(typeof mfootRender==='function')mfootRender();var ia=QT.on&&!!(QT.intra&&QT.intra.stale),al=QT.on&&QT.st==='DELAYED'||ia;$('h-alert').hidden=!al;if(ia)$('h-alert').textContent='盤中資料延遲：後端盤中快照超過預期時間沒有更新，價格與安全邊際停在 '+(QT.intra.hm||'—')+'；恢復後自動更新。';else if(al)$('h-alert').textContent='行情延遲：超過 2 分鐘沒有新資料，成交價與安全邊際停在 '+hm(QT.last)+'；恢復後自動更新。';}
 function quotesChanged(full){
   if(QT.t)return;
   QT.t=setTimeout(function(){QT.t=null;updLine();
     if(curPage==='home'){if(full||HS.pxl!==pxLabel())hRender();else hUpdateQuotes();} /* 價格欄名稱變了（盤中價 ↔ 收盤價）要重畫表頭與手機排序選單 */
-    else if(curPage==='watch')wRender();
+    else if(curPage==='watch'){if(full)wRender();else wUpdateQuotes();} /* 只換價格與安全邊際格，不整頁重畫 */
     else if(curPage==='stock')sValRender(SP.id);
   },full?0:300);
 }
@@ -762,7 +769,7 @@ function wRender(){
     b+='<tr id="wr-'+eid+'" class="'+(r.rank==null?'nd':'')+(WS.sel===id?' sel':'')+'" data-row="'+eid+'" draggable="true">';
     b+='<td class="fz" style="left:0;padding:0"><span class="handle" aria-hidden="true" title="拖曳調整順序">⋮⋮</span></td><td class="fz mono" style="left:28px"><button class="selbtn" data-wsel="'+eid+'" aria-label="標示此列">'+eid+'</button></td>';
     b+='<td class="fz" style="left:84px;border-right:1px solid var(--line2)"><button class="namelink" data-open="'+eid+'"><span class="nm">'+esc(r.name)+'</span></button><span style="color:var(--faint);font-size:11px;margin-left:6px">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+esc(r.rank))+'</span>'+pcMark(r)+' '+badges(r)+'</td>';
-    b+='<td class="fz num'+(EX.stale?' stale':'')+'" style="left:'+WFX[0][1]+'px">'+pxHtml(o)+'</td><td class="fz num" style="left:'+WFX[1][1]+'px">'+fmt(o.typ)+'</td><td class="fz num'+(EX.stale?' stale':'')+'" style="left:'+WFX[2][1]+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td><td class="fz num" style="left:'+WFX[3][1]+'px;border-right:2px solid #3A4149">'+gnHtml(o)+'</td>';
+    b+='<td class="fz num'+(EX.stale?' stale':'')+'" data-wq="'+eid+'" style="left:'+WFX[0][1]+'px">'+pxHtml(o)+'</td><td class="fz num" style="left:'+WFX[1][1]+'px">'+fmt(o.typ)+'</td><td class="fz num'+(EX.stale?' stale':'')+'" data-wm="'+eid+'" style="left:'+WFX[2][1]+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td><td class="fz num" style="left:'+WFX[3][1]+'px;border-right:2px solid #3A4149">'+gnHtml(o)+'</td>';
     b+='<td class="vgrp first num">'+fmt(o.min)+'</td><td class="vgrp num">'+fmt(o.max)+'</td><td class="vgrp num'+(over?' over':'')+'" style="border-right:2px solid #3A4149">'+fmt(o.cap)+'</td>';
     r.maj.forEach(function(m){b+=scoreCell(m,false,'');});
     b+='<td class="jr" style="right:194px;border-left:1px solid var(--line2);text-align:center" data-spark="'+eid+'">'+spark(id)+'</td><td class="jr" style="right:44px;text-align:center" data-rev="'+eid+'">'+revBars(id)+'</td><td class="jr" style="right:0;text-align:center"><button class="addbtn on" data-menu="'+eid+'" aria-label="管理自選群組（目前 '+esc(gg?gg.name:'')+'）"><span class="dot" style="background:'+(gg?gg.color:'')+'"></span></button></td></tr>';
@@ -770,15 +777,27 @@ function wRender(){
   if(!g||!g.ids.length)b='<tr><td colspan="30" style="text-align:left;color:var(--faint);padding:16px">此群組還沒有公司。到首頁點「＋」加入。</td></tr>';
   $('w-body').innerHTML=b;
   importBanner();
-  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');$('w-legend3').textContent=miss.length?miss.join('、')+'尚未提供':(PAGES?(QT.intra?'盤中為約 10 分鐘更新的快照（非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):'成交價來源 FinMind；安全邊際依即時股價計算');
+  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');$('w-legend3').textContent=miss.length?miss.join('、')+'尚未提供':(PAGES?(QT.live?'FinMind 盤中價（約 30 秒更新）；安全邊際依該價格計算；資料來源：FinMind':QT.intra?'證交所盤中快照（約 10 分鐘延遲，非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):'成交價來源 FinMind；安全邊際依即時股價計算');
   if(isM()){
     var ids=g?g.ids:[];
     $('w-mlist').innerHTML=ids.length?ids.map(function(id,ix){
       var r=BYID[id],o=sim(id),mg=margin(o),open=!!MX.open['w'+id],eid=esc(id);
       var acts='<div style="display:flex;gap:10px;align-items:center">'+spark(id)+revBars(id)+'</div><div class="mact"><a class="btn" href="#/stock/'+eid+'/'+encodeURIComponent('watch:'+W.cur)+'">個股分析</a><button class="btn" data-wmove="'+eid+'|-1"'+(ix===0?' disabled':'')+'>上移</button><button class="btn" data-wmove="'+eid+'|1"'+(ix===ids.length-1?' disabled':'')+'>下移</button><button class="btn" data-menu="'+eid+'">群組／移出</button></div>';
-      return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+'"><button class="mhead" data-wexp="'+eid+'" aria-expanded="'+open+'"><span class="mrk num">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+esc(r.rank))+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+pcMark(r)+badges(r)+'</span><span class="l2">'+esc(id)+'｜'+esc(r.ind)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'">'+pxHtml(o)+'</span><span class="mmg num" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+(open?mDetail(r,acts):'')+'</div>';
+      return '<div class="mrow'+(open?' open':'')+(r.rank==null?' nd':'')+'"><button class="mhead" data-wexp="'+eid+'" aria-expanded="'+open+'"><span class="mrk num">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+esc(r.rank))+'</span><span class="mnm"><span class="l1"><b>'+esc(r.name)+'</b>'+pcMark(r)+badges(r)+'</span><span class="l2">'+esc(id)+'｜'+esc(r.ind)+'</span></span><span class="mpx num'+(EX.stale?' stale':'')+'" data-wq="'+eid+'">'+pxHtml(o)+'</span><span class="mmg num" data-wm="'+eid+'" style="'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</span></button>'+(open?mDetail(r,acts):'')+'</div>';
     }).join(''):'<div class="placeholder" style="padding:16px">此群組還沒有公司。到首頁點「＋」加入。</div>';
   }else $('w-mlist').innerHTML='';
+  WQ.stale=EX.stale;WQ.legend=$('w-legend3').textContent;
+}
+/* 自選頁行情更新（FinMind 約 30 秒）：只換價格與安全邊際格；延遲狀態（整列樣式）變了才整頁重畫 */
+var WQ={stale:null,legend:null};
+function wUpdateQuotes(){
+  if(WQ.stale!==EX.stale){wRender();return;}
+  var host=isM()?$('w-mlist'):$('w-body');
+  host.querySelectorAll('[data-wq]').forEach(function(el){var h=pxHtml(sim(el.dataset.wq));if(el.innerHTML!==h)el.innerHTML=h;});
+  host.querySelectorAll('[data-wm]').forEach(function(el){var o=sim(el.dataset.wm),mg=margin(o),h=mgTxt(o,mg);if(el.innerHTML!==h)el.innerHTML=h;el.style.color=EX.stale?'':(mg==null?'var(--muted)':chgColor(mg));});
+  var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');
+  if(miss.length)return;var lg=PAGES?(QT.live?'FinMind 盤中價（約 30 秒更新）；安全邊際依該價格計算；資料來源：FinMind':QT.intra?'證交所盤中快照（約 10 分鐘延遲，非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):null;
+  if(lg&&lg!==WQ.legend){$('w-legend3').textContent=lg;WQ.legend=lg;}
 }
 var dragId=null;
 $('w-body').addEventListener('dragstart',function(e){var tr=e.target.closest('tr[data-row]');if(!tr)return;dragId=tr.dataset.row;e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',dragId);}catch(x){}});
@@ -925,7 +944,7 @@ function sValRender(id){
     if(o.cap!=null&&o.price>o.cap&&bf.indexOf('PRICE_ABOVE_DATA_SUPPORT')<0){var t0=tr1('PRICE_ABOVE_DATA_SUPPORT');seen[t0]=1;f.push('<span class="flag" title="'+esc(pxWord()+' '+fmt(o.price)+' 高於數據上限 '+fmt(o.cap))+'">'+esc(t0)+'</span>');}}
   bf.forEach(function(c){var t=tr1(c);if(seen[t])return;seen[t]=1;f.push('<span class="flag" title="'+esc(c)+'">'+esc(t)+'</span>');});
   if(!VAL.on)f.push('<span class="placeholder">估價尚未提供。</span>');else if(o.vst&&o.vst!=='OK')f.push('<span class="placeholder" title="'+esc(o.vst)+'">此公司估價'+(o.vst==='PARTIAL'?'只提供中心值，不提供上下限與數據上限':o.vst==='NOT_APPLICABLE'?'不適用':'不可得')+(rc.length?'：'+trHtml(rc):'')+'。</span>');
-  if(!QT.on)f.push('<span class="placeholder">行情尚未接上。</span>');else if(VAL.on)f.push('<span class="placeholder">安全邊際依'+(PAGES?'最近收盤價':'即時股價')+'計算，與規格書以估價基準日收盤價計算的數值不同。</span>');
+  if(!QT.on)f.push('<span class="placeholder">行情尚未接上。</span>');else if(VAL.on)f.push('<span class="placeholder">安全邊際依'+(PAGES?(QT.live?'FinMind 盤中價':QT.intra?'證交所盤中快照價':'最近收盤價'):'即時股價')+'計算，與規格書以估價基準日收盤價計算的數值不同。</span>');
   $('s-flags').innerHTML=f.join('');
 }
 
@@ -1124,7 +1143,7 @@ function stRender(){
   ];
   $('st-kv').innerHTML=kv.filter(Boolean).map(function(x){return '<div><div class="k">'+esc(x[0])+'</div><div class="v">'+esc(x[1])+'</div></div>';}).join('');
   var lg=SRV.mode!=='server'?'':(SRV.auth?'已登入　<button class="btn sm" data-logout="1">登出</button>':'未登入（可瀏覽，不能修改）　<button class="btn sm primary" data-login="1">登入</button>');
-  $('st-src').innerHTML=(lg?'<div style="margin-bottom:8px">登入狀態：'+lg+'</div>':'')+(PAGES?'評分與明細：後端 Server API 的批次資料（/data/…，依 manifest 版本）<br>行情：每日收盤與近 20 日、近 5 月營收（/api/market/…），非即時'+(fmSrc()?'；收盤資料來源：FinMind':'')+'<br>自選群組、新聞／報告設定與個股問題：存在這台瀏覽器；登入後依帳號雲端同步':'首頁與個股資料：/api/v1/home、/api/v1/companies/{代號}（依正式 pointer）<br>行情：FinMind 全市場快照，主機每 30 秒抓取並推送；畫面標示資料來源 FinMind<br>自選群組、新聞與報告設定、個股問題：'+(SRV.mode==='server'?'存在主機':'目前只存在這台瀏覽器'));
+  $('st-src').innerHTML=(lg?'<div style="margin-bottom:8px">登入狀態：'+lg+'</div>':'')+(PAGES?'評分與明細：後端 Server API 的批次資料（/data/…，依 manifest 版本）<br>行情：每日收盤與近 20 日、近 5 月營收（/api/market/…），非即時'+(QT.live?'；盤中為 FinMind 盤中價（登入後約 30 秒更新；資料來源：FinMind）':QT.intra?'；盤中為證交所快照（約 10 分鐘延遲）':'')+(fmSrc()&&!QT.live?'；收盤資料來源：FinMind':'')+'<br>自選群組、新聞／報告設定與個股問題：存在這台瀏覽器；登入後依帳號雲端同步':'首頁與個股資料：/api/v1/home、/api/v1/companies/{代號}（依正式 pointer）<br>行情：FinMind 全市場快照，主機每 30 秒抓取並推送；畫面標示資料來源 FinMind<br>自選群組、新聞與報告設定、個股問題：'+(SRV.mode==='server'?'存在主機':'目前只存在這台瀏覽器'));
 }
 /* ================= router ================= */
 var lastScroll={},curPage='home';
@@ -1213,8 +1232,9 @@ var wasM=isM();window.addEventListener('resize',function(){var m=isM();if(m!==wa
 function basisTxt(){return '分析財報 '+v(H.requested_period)+'｜DAR-L 依 '+v(H.annual_period)+' 年報｜資料計算 '+v(STAT.data_calculation_version)+'｜as-of '+v(H.as_of);}
 $('h-basis').textContent=basisTxt();
 /* 手機註腳：日期不在中間斷行 */
-$('h-mfoot').innerHTML=esc(basisTxt()+'｜試算').replace(/\d{4}-\d{2}-\d{2}|\d{4}Q\d/g,'<span class="nb">$&</span>');
-function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.intra?'行情為盤中快照（約 10 分鐘更新，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+(fmSrc()?'；資料來源：FinMind':'')+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?'收盤價':'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
+function mfootRender(){$('h-mfoot').innerHTML=esc(basisTxt()+'｜試算'+(PAGES&&fmSrc()?'｜資料來源：FinMind':'')).replace(/\d{4}-\d{2}-\d{2}|\d{4}Q\d/g,'<span class="nb">$&</span>');}
+mfootRender();
+function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.live?'行情為 FinMind 盤中價（約 30 秒更新；'+esc(QT.live.hms||'—')+'；資料來源：FinMind）':QT.intra?'行情為證交所盤中快照（約 10 分鐘延遲，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+(fmSrc()?'；資料來源：FinMind':'')+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?(QT.live||QT.intra?'盤中價':'收盤價'):'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
 bannerRender();
 $('h-upd').textContent='行情：尚未接上';
 if(PAGES){$('w-store').textContent='自選存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';$('ns-store').textContent='設定存在這台瀏覽器；登入帳號後各裝置同步｜來源：Google／Bing 新聞（每 30 分鐘更新）';}

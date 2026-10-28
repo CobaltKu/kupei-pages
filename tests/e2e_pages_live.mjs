@@ -115,12 +115,12 @@ await check('盤中 CLOSED：維持「收盤價 M/D・非即時」與收盤價',
   must(calls(/intraday/).length >= 1, '沒有讀盤中端點')
   await p.context().close(); return lbl
 })
-await check('盤中 OPEN：價格覆蓋收盤、標示「盤中 HH:MM（約 N 分鐘更新，N 依 ttlSeconds）」、沒成交顯示「—」', async () => {
+await check('盤中 OPEN（證交所 MIS 快照）：價格覆蓋收盤、標示「證交所・約 10 分鐘延遲・HH:MM」、沒成交顯示「—」', async () => {
   M.intraday = OPEN(false)
   const p = await open('#/stock/2330/home'); await p.waitForTimeout(1500)
-  const lbl = await p.innerText('#h-upd'); must(lbl.includes('盤中 10:15（約 5 分鐘更新）'), '標示：' + lbl)
+  const lbl = await p.innerText('#h-upd'); must(lbl.includes('證交所・約 10 分鐘延遲・10:15') && !/FinMind/.test(lbl), '標示：' + lbl)
   const t = await p.innerText('#s-valcard'); must(t.includes('1,234.5'), '個股頁沒有盤中價格：' + t.slice(0, 120))
-  must(/盤中 10:15/.test(await p.innerText('#s-vbase')), '個股頁基準列沒有盤中時間')
+  must(/證交所・約 10 分鐘延遲・10:15/.test(await p.innerText('#s-vbase')), '個股頁基準列沒有盤中時間')
   must((await p.innerText('#s-val .k')).trim() === '成交價', '價格欄名稱依規格 B2 固定為「成交價」（盤中時間由標示線說明）')
   must(await p.isHidden('#h-alert'), '不延遲時不該有警示')
   await shot(p, 'intraday_open_stock')

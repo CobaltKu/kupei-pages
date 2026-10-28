@@ -18,6 +18,13 @@
 
 UI 不重算任何分數、名次或 Gate；後端沒有交付的資料顯示「尚未提供」。正式 r8 批次（`server_v3_0_30_r8_r2_20261027`）已含估價（`valuation.json`）、說明（`help.json`）、`summary.json` 的 `company_meta`（評估狀態、第二階段處置、複核來源）與分數樹節點的 `goal`／`definition`／`peer_*`，橋接層（`src/bridge.ts`）直接轉成畫面欄位，沒有的批次維持空值。新聞（`/api/news`，Google／Bing 新聞 RSS）、報告（`/api/reports`，由 KuPei 管線推送）、盤中快照（`/api/market/intraday`，盤中約每 10 分鐘）已接後端（2026-10-27）。
 
+## 盤中 FinMind 30 秒（登入後）
+
+- 登入後由 `src/bridge.ts` 讀 `GET /api/market/live`（FinMind 盤中價，只有登入權杖可讀）：盤中（`phase=OPEN`，還不知道時先試一次）且分頁可見時每 `intervalSeconds`（30 秒）讀一次；分頁隱藏不讀、回來立刻補一次；`PRE`／`CLOSED` 改每 10 分鐘檢查一次；同一時間只有一個請求；429 依 `Retry-After`（讀不到 30 秒）等，其他失敗 30 秒起加倍、最多 10 分鐘。
+- 有資料且 `stale=false`：價格與漲跌用 FinMind，標示「FinMind・HH:MM:SS」，狀態列、說明列、手機頁尾標「資料來源：FinMind」。`stale=true`、503、斷線、或 starter 還沒有 `kupei.marketLive()` → 退回證交所 MIS 盤中快照（`/api/market/intraday`），標「證交所・約 10 分鐘延遲・HH:MM」；FinMind 恢復後自動切回。
+- 更新時只換價格與安全邊際格（首頁、自選頁不整頁重畫）。登出或登入失效時停止並清掉 FinMind 資料。
+- starter 尚未提供 `marketLive`：橋接層用 `LiveQuotesLocal`（欄位照契約）暫代型別，starter 同步後改用 `kupei-types` 的 `LiveQuotes`。
+
 ## 本機開發
 
 1. `npm install`
@@ -43,8 +50,9 @@ UI 不重算任何分數、名次或 Gate；後端沒有交付的資料顯示「
 - `tests/e2e_pages_account2.mjs`：用假的帳號與雲端文件端點測「忘記密碼」（登入畫面連結切換、欄位驗證、重設碼錯 401 的訊息、成功後已登入且 `kupei:session` 換新並提示其他裝置已登出）與「匯入舊的寫入權杖資料」（權杖錯、沒有資料可匯入、摘要與確認後寫進帳號雲端、本機換新且 `kupei3_*_prev` 有備份、409 重讀版本重試一次、額度已滿不重試、權杖不進網址與 storage），13 項；不建立真實帳號。`SHOTS=<資料夾>` 另存截圖。
 - `tests/e2e_pages_xss.mjs`：在 `localStorage` 預先放入惡意或結構錯誤的 `kupei3_watch`／`kupei3_news`／`kupei3_report`（模擬被改寫的雲端文件）後載入各頁，確認注入的程式沒有執行、不合格的群組與欄位被丟棄、頁面仍正常顯示，8 項；不需登入。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages_xss.mjs`
 - `tests/e2e_pages_sync.mjs`：用假的帳號與雲端文件端點測同步邏輯（首次登入上傳（閘門前已存在的本機資料）、跨裝置、版本衝突、只有寫入權杖時停在登入畫面不同步、登出、換帳號不混資料、版本號巧合、409 無文件、啟動同步逾時），11 項；不建立真實帳號。
-- `tests/e2e_pages_live.mjs`：盤中行情、新聞、報告（後端新端點全部用假的回應），14 項：盤中 CLOSED／OPEN／stale 三種標示與價格覆蓋（盤中沒成交顯示「—」、價格欄名稱改「盤中價」）、只有盤中依 `ttlSeconds` 重抓（用 Playwright 假時鐘）、產業與個股新聞的請求參數（關鍵字與排除字來自本機新聞設定、`days`）、惡意標題不執行、非 https 連結不可點、新聞來源與停用來源、報告列表與單篇（summary 原樣以文字顯示、不解析 markdown）、產生報告請求（未登入引導登入、登入後 202、重複回同一筆、`QUOTA_EXCEEDED` 提示）；不建立真實帳號。`SHOTS=<資料夾>` 另存截圖。
+- `tests/e2e_pages_live.mjs`：盤中行情、新聞、報告（後端新端點全部用假的回應），14 項：盤中 CLOSED／OPEN（證交所 MIS，標「證交所・約 10 分鐘延遲・HH:MM」）／stale 三種標示與價格覆蓋（盤中沒成交顯示「—」、價格欄名稱固定「成交價」）、只有盤中依 `ttlSeconds` 重抓（用 Playwright 假時鐘）、產業與個股新聞的請求參數（關鍵字與排除字來自本機新聞設定、`days`）、惡意標題不執行、非 https 連結不可點、新聞來源與停用來源、報告列表與單篇（summary 原樣以文字顯示、不解析 markdown）、產生報告請求（未登入引導登入、登入後 202、重複回同一筆、`QUOTA_EXCEEDED` 提示）；不建立真實帳號。`SHOTS=<資料夾>` 另存截圖。
 - `tests/e2e_pages_wiring.mjs`：資料橋接修正（2026-10-28），10 項：估價檔延遲 6 秒時首頁不等它、狀態頁估價基準日晚到再補；休市日（phase=OPEN、stale、快照是前一天）退回收盤價不標盤中，今天的快照延遲才標「盤中資料延遲」；`latest.source` 有 finmind 時首頁、個股估價卡、狀態頁標「資料來源：FinMind」；新聞停用來源依媒體名稱（聚合器不能停用，重新載入後直接開設定頁也列得出來）；個股頁快速翻 4 家只替停下來的那家打報告與新聞、回到看過的 5 分鐘內不重打、卡片在畫面內約 0.6 秒就載入、新聞頁不延遲；報告請求的整數 id 轉成字串、202／200 分得出來；`company_meta`／`valuation.json` 欄位結構不對時丟掉不合格的、不卡在載入中；`summary.json` 只讀一次。盤中、新聞、報告、帳號用假的回應，評分與收盤行情用線上資料（部分在回應上改欄位）。
+- `tests/e2e_pages_finmind.mjs`：FinMind 盤中價（`/api/market/live` 全部假的回應），11 項：有 FinMind 時用它的價格與標示、每 30 秒只更新價格格（列不重建）、stale 與 503 退回證交所 MIS 並在恢復後切回、失敗間隔加倍、429 依 `Retry-After`、分頁隱藏不讀回來補一次、收盤改 10 分鐘檢查、登出與登入失效停止、starter 沒有 `marketLive` 不發請求、手機寬度。starter 同步前要對 `npm run dev` 跑（測試在 dev server 的 `/src/kupei-client.ts` 補上 `marketLive`）。`SHOTS=<資料夾>` 另存 `kp-live-*.png`。
 - `tests/e2e_pages_ui.mjs`：畫面修正的回歸測試（盤中端點用假的回應），6 項：手機排序每個選項（含「安全邊際」）不報錯、會重排、點列能展開；盤中轉收盤時桌機表頭、手機排序選單從「盤中價」改回「收盤價」（Playwright 假時鐘，含換頁再回首頁）；不存在的代號不顯示上一家的估價與問題卡；估價卡旗標不重複、數值在 1440 與 390 寬都不截斷、估價格與股價位置有滑鼠提示；搜尋多筆相符提示「找到 N 筆」、代號完全相符直接跳、首頁分數格滑鼠提示；狀態頁、說明頁、報告與新聞設定不外露內部備忘與原始 ISO 時間。`SHOTS=<資料夾>` 另存截圖。
 - `tests/e2e_pages_questions.mjs`：個股問題（用假的帳號與雲端文件端點），14 項（設 `SHOTS` 時 15 項）：登入後新增（含相關大項）並寫入雲端、改狀態、刪除／顯示已刪除／恢復、重新整理後仍在、惡意內容以文字顯示不執行、Idempotency-Key 相同只新增一次、If-Match 舊版本回 409、上限提示（每則 1,000 字、每家 100 則、整份約 200 KB）、本機被改寫成惡意或錯誤結構時丟棄不合格的、登入後上傳 `ui-questions`、修改後寫入雲端、另一台裝置登入讀得到、換帳號不上傳上一個帳號的問題；不建立真實帳號。`SHOTS=<資料夾>` 另存截圖。
 - `tests/e2e_pages_perf.mjs`：數據顯示效能量測與防退化門檻（對線上 Workers 資料；要 `KUPEI_TEST_SESSION`，沒設就略過），桌機 1440 與手機 390 各跑 `RUNS` 次（預設 3）取中位數：首次／回訪到首頁第一屏、出現收盤價、全部列畫完的時間，排序、篩選、搜尋跳至、個股頁、自選頁的耗時，主執行緒長任務，行情請求次數；另檢查首頁啟動只整表畫一次、latest／history 不重複打、選用檔（valuation、help）不 404 且每次載入最多讀一次、桌機排序重用列的結果正確、自選頁小圖載入中顯示「…」，8 項。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages_perf.mjs`（`OUT=<檔案>` 另存 JSON；`NOGATE=1` 只量不判門檻，量舊版用）。門檻是寬鬆的上限（回訪全部列 < 3 秒、排序與篩選 < 1.5 秒），數字會隨機器負載浮動。
