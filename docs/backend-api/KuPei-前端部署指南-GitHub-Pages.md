@@ -2,6 +2,8 @@
 
 給 KuPei 前端的開發者。前端由 KuPei 自行部署到 GitHub Pages，後端由後端窗口提供（`KuPei-API.md`）。串接規則見《2026-10-23_KuPei前端串接規範.md》。
 
+> **2026-10-28 起（K-53）本頁關於唯讀權杖的步驟作廢。** 網站只限維護者發的帳號：前端先登入才讀資料（登入權杖 `kps_`），建置**不再注入任何權杖**，GitHub secret `VITE_KUPEI_TOKEN` 不需要、可刪除；公開唯讀權杖會被後端停用（`READ_TOKEN_ENABLED=false`）。下面「權杖會在建置後的前端程式裡」「設定 secret `VITE_KUPEI_TOKEN`」「換權杖」等段落只留作歷史紀錄；其餘部署步驟（Pages 設定、base 路徑、workflow）照舊。
+
 ## 先知道的兩件事
 
 1. **GitHub Pages 的網站一律公開。** repo 可以設私人（需 GitHub Pro），但發布出去的網頁任何人都打得開。

@@ -9,8 +9,10 @@
 //   6. 雲端文件（store）：整包 JSON＋版本號；update() 讀改寫並自動處理 409。
 //   7. 使用者帳號：auth.register／login 拿登入權杖（存在 storage key kupei:session），之後所有請求都用它，
 //      雲端文件依帳號分開存。權杖優先順序：登入權杖 ＞ 寫入權杖 ＞ 建置時的唯讀權杖。
+//      2026-10-28 起（K-53）網站只限維護者發的帳號：註冊預設關閉（register 丟 403 REGISTRATION_CLOSED），
+//      唯讀權杖即將停用——建置時不要再給 token，沒登入就顯示登入畫面，登入後所有讀取都用登入權杖。
 //      用登入權杖時收到 401 UNAUTHENTICATED（過期、在別處登出、帳號被停用、在別台裝置改了密碼）→ 自動清掉 session，前端回到未登入。
-//      註冊前先呼叫 auth.config()：inviteRequired 為 true 時註冊畫面要多一個邀請碼欄位。
+//      auth.config()：registrationOpen 為 false（預設）時不要顯示註冊入口；為 true 才能註冊，inviteRequired 為 true 時要多一個邀請碼欄位。
 //      auth.changePassword() 成功後這個帳號所有裝置的舊權杖都失效，這台自動換成新權杖。
 //      忘記密碼：使用者向維護者拿一次性重設碼（24 小時、只能用一次），auth.resetPassword(帳號, 重設碼, 新密碼)
 //      成功後所有裝置的舊權杖失效，這台直接是登入狀態（同 login）。
@@ -19,11 +21,12 @@
 //      不打網路；有就帶 ?v=<雜湊> 抓一次，同一個批次之後直接回記憶體，換批次才重抓。內容形狀由批次交付方決定，用前自己檢查。
 //   9. 新聞與報告：news() 後端代抓 Google 新聞（瀏覽器可留 5 分鐘）；reports()／report() 讀報告 metadata（檔案只有外部連結）。
 //      requestReport()／reportRequests() 只限登入（沒登入丟 401 UNAUTHENTICATED、不打網路）；報告由外部管線產生，不要輪詢進度。
-//  10. 報告參考檔（2026-10-28）：reportInputs.upload／list／download／remove 只限登入（沒登入丟 401、不打網路）。
+//  10. 報告參考檔（2026-10-28）：reportInputs.upload／list／download／remove／unlock 只限登入（沒登入丟 401、不打網路）。
 //      upload 在瀏覽器算 SHA-256、依副檔名決定 Content-Type（不靠瀏覽器猜），本文是檔案原始位元組；只看得到自己上傳的。
 //
 // 用法：
-//   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE, token: import.meta.env.VITE_KUPEI_TOKEN })
+//   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE })   // 2026-10-28 起不帶唯讀權杖（K-53）
+//   if (!kupei.getSession()) await kupei.auth.login(username, password)            // 帳號由維護者發；沒登入只顯示登入畫面
 //   kupei.preload()                                      // app 一啟動就呼叫，評分與行情同時開跑
 //   const ds = await kupei.loadDataset({ onUpdate })     // 可能先回快取的舊批次，換批次時 onUpdate 會再給新的
 //   const latest = await kupei.marketLatest()
@@ -32,8 +35,8 @@
 //   const valuation = await kupei.loadValuation()         // 這個批次沒有估價就是 null → 不要顯示估價欄位
 //   const help = await kupei.loadHelp()                   // 說明頁；null ＝ 沒交付
 //   const nodeInfo = await kupei.loadNodeInfo()           // 節點完整定義；null ＝ 沒交付（英文名仍看 ds.nodeName）
-//   const { inviteRequired } = await kupei.auth.config()  // 註冊要不要邀請碼
-//   await kupei.auth.register(username, password, inviteCode)   // 或 kupei.auth.login(...)；成功回 { user }
+//   const { registrationOpen, inviteRequired } = await kupei.auth.config()  // 有沒有開放註冊（預設 false）、要不要邀請碼
+//   await kupei.auth.register(username, password, inviteCode)   // 只在 registrationOpen 為 true 時；成功回 { user }
 //   await kupei.auth.changePassword(current, next)       // 其他裝置全部登出，這台換新權杖
 //   await kupei.auth.resetPassword(username, resetCode, next)   // 忘記密碼：用維護者給的重設碼設新密碼，成功即登入
 //   kupei.getSession()                                   // { username, expiresAt } | null，同步、不打網路
@@ -44,6 +47,7 @@
 //   await kupei.requestReport('2330', '2026Q2')           // 登入後才能送；進度看 kupei.reportRequests('2330')
 //   const input = await kupei.reportInputs.upload('2330', file)   // <input type="file"> 的 File；≤ 20 MiB、pdf/txt/md/csv/xlsx/png/jpg
 //   const blob = await kupei.reportInputs.download('2330', input.id)   // 只限自己上傳的；kupei.reportInputs.remove(...) 刪除
+//   await kupei.reportInputs.unlock('2330', input.id)   // 沒有報告再引用時解鎖（之後才能刪）；仍被引用 409 INPUT_REFERENCED
 import type {
   ApiErrorBody,
   AuthConfig,
@@ -85,8 +89,11 @@ import type {
 export interface KupeiConfig {
   /** 例如 https://kupei-dashboard.tmac19920626.workers.dev（結尾不要斜線） */
   baseUrl: string
-  /** 唯讀權杖；從環境變數讀，不要寫死 */
-  token: string
+  /**
+   * 唯讀權杖；從環境變數讀，不要寫死。2026-10-28 起（K-53）可以省略：網站只限登入帳號，
+   * 後端停用唯讀權杖之後帶它一律 401。沒有登入、也沒有權杖時，請求不帶 Authorization（後端回 401）。
+   */
+  token?: string
   /**
    * 寫入權杖（雲端文件用）。不要放進建置或環境變數：由使用者在 App 的設定畫面輸入一次，
    * 客戶端會存在 storage（key kupei:write-token）。設了之後所有請求都用它（它是唯讀權杖的超集）。
@@ -248,7 +255,7 @@ export function createKupeiClient(cfg: KupeiConfig) {
   const doFetch = cfg.fetch ?? fetch
   const timeoutMs = cfg.timeoutMs ?? 20_000
   const storage = cfg.storage === undefined ? (typeof localStorage === 'undefined' ? null : localStorage) : cfg.storage
-  if (!cfg.token) console.warn('[kupei] 沒有權杖：請在 .env.local 設定 VITE_KUPEI_TOKEN')
+  // 2026-10-28 起（K-53）不帶唯讀權杖是正常的（只靠登入權杖），所以不再警告
 
   let writeToken: string | null = cfg.writeToken ?? null
   if (writeToken === null && storage) {
@@ -615,8 +622,9 @@ export function createKupeiClient(cfg: KupeiConfig) {
     auth: {
       /**
        * 註冊並直接登入。帳號 3～32 字（英數與 _ . -，開頭英數，不分大小寫），密碼 8～128 字。
+       * 只在 config().registrationOpen 為 true 時能用（2026-10-28 起預設關閉，關閉時一律 403 REGISTRATION_CLOSED）。
        * inviteCode：config().inviteRequired 為 true 時必填（關閉時會被忽略，帶了也沒關係）。
-       * 錯誤：409 USERNAME_TAKEN、400 BAD_REQUEST、403 INVITE_REQUIRED（沒填邀請碼）、403 INVITE_INVALID（邀請碼不對）、
+       * 錯誤：403 REGISTRATION_CLOSED（註冊關閉）、409 USERNAME_TAKEN、400 BAD_REQUEST、403 INVITE_REQUIRED（沒填邀請碼）、403 INVITE_INVALID（邀請碼不對）、
        * 429 RATE_LIMITED（每分鐘 10 次）
        */
       async register(username: string, password: string, inviteCode?: string): Promise<{ user: AuthUser }> {
@@ -678,7 +686,7 @@ export function createKupeiClient(cfg: KupeiConfig) {
         return { user: r.user }
       },
 
-      /** 註冊設定（不需要登入）：inviteRequired 為 true 時註冊要填邀請碼。每次打開註冊畫面時呼叫即可，不用快取 */
+      /** 註冊設定（不需要登入）：registrationOpen 為 false 時不要顯示註冊入口；inviteRequired 為 true 時註冊要填邀請碼。要顯示登入／註冊畫面時呼叫即可，不用快取 */
       async config(): Promise<AuthConfig> {
         return get<AuthConfig>('/api/auth/config', { cache: 'no-store', anonymous: true })
       },
@@ -746,7 +754,7 @@ export function createKupeiClient(cfg: KupeiConfig) {
 
       /**
        * 上傳一個檔（<input type="file"> 的 File，或 Blob＋檔名）。允許 pdf、txt、md、csv、xlsx、png、jpg／jpeg，≤ 20 MiB；
-       * 副檔名、內容（檔頭；文字檔要 UTF-8）不對 415 UNSUPPORTED_TYPE、太大 413 TOO_LARGE、每人超過 50 個或 200 MiB 413 QUOTA_EXCEEDED。
+       * 副檔名、內容（檔頭；文字檔要 UTF-8）不對 415 UNSUPPORTED_TYPE、太大 413 TOO_LARGE、每人超過 50 個或 200 MiB（被報告鎖定的不算）413 QUOTA_EXCEEDED。
        * 在瀏覽器算 SHA-256 帶在 X-Content-SHA256（伺服器交給 R2 驗證，傳壞了 400 CHECKSUM_MISMATCH，重傳即可）。
        * 上傳不是 GET，被限流（429）不會自動重試。
        */
@@ -775,10 +783,20 @@ export function createKupeiClient(cfg: KupeiConfig) {
         return get<Blob>(`${inputsPath(code)}/${encodeURIComponent(id)}`, { cache: 'no-store', token: s.token, blob: true })
       },
 
-      /** 刪除（R2 物件立即刪掉，無法復原）。已被報告引用 409 INPUT_LOCKED；不是自己的或不存在 404 */
+      /** 刪除（R2 物件立即刪掉，無法復原）。已被報告引用 409 INPUT_LOCKED（先 unlock）；不是自己的或不存在 404 */
       async remove(code: string, id: string): Promise<{ status: 'ok' }> {
         const s = requireSession()
         return get<{ status: 'ok' }>(`${inputsPath(code)}/${encodeURIComponent(id)}`, { method: 'DELETE', cache: 'no-store', token: s.token })
+      },
+
+      /**
+       * 解鎖（2026-10-28）：沒有任何報告再引用時把 locked 改回 false，之後才能刪（remove）。回更新後的 metadata；本來就沒鎖也照回（可重複呼叫）。
+       * 仍被報告引用 409 INPUT_REFERENCED，KupeiError.details 是 kupei-types.ts 的 ReportInputReferencedDetails（{ reports: [{ period, rev }] }，最多 20 筆）；
+       * 不是自己的或不存在 404。報告改版不再引用時後端會自動解鎖，所以通常不用呼叫；鎖定中的檔不計入每人 50 個／200 MiB，解鎖後重新計入。
+       */
+      async unlock(code: string, id: string): Promise<ReportInput> {
+        const s = requireSession()
+        return get<ReportInput>(`${inputsPath(code)}/${encodeURIComponent(id)}/unlock`, { method: 'POST', cache: 'no-store', token: s.token })
       },
     },
 

@@ -8,7 +8,7 @@
 | --- | --- |
 | Base URL | `https://kupei-dashboard.tmac19920626.workers.dev` |
 | 驗證 | 標頭 `Authorization: Bearer <權杖>`（權杖由維護者另外給你，不要放進版控） |
-| 權限 | 唯讀權杖：評分資料與行情。**使用者帳號**（2026-10-26 起）：使用者在 App 自己註冊、登入，拿到登入權杖（`kps_…`），多了雲端文件 `/api/store` 的讀寫（依帳號分開），也能讀一切。**寫入權杖**（舊做法，站長本人用，繼續可用）：同樣能讀寫 `/api/store`，但所有拿這把權杖的人共用同一份文件 |
+| 權限 | **使用者帳號（2026-10-28 起前端唯一的方式，K-53）**：帳號由維護者發給你（註冊預設關閉），登入拿到登入權杖（`kps_…`），讀評分資料、行情、新聞、報告，加上雲端文件 `/api/store`（依帳號分開）。唯讀權杖：評分資料與行情——**即將停用**（見下方說明），前端不要再用。（以前：使用者在 App 自己註冊、登入，拿到登入權杖（`kps_…`），多了雲端文件 `/api/store` 的讀寫（依帳號分開），也能讀一切。**寫入權杖**（舊做法，站長本人用，繼續可用）：同樣能讀寫 `/api/store`，但所有拿這把權杖的人共用同一份文件 |
 | CORS | 本機 `http://localhost:<任何埠>`、`http://127.0.0.1:<任何埠>` 可以直接從瀏覽器呼叫；正式站（GitHub Pages）要先把來源 `https://<帳號>.github.io` 告知維護者加入白名單（見《KuPei-前端部署指南-GitHub-Pages.md》） |
 | 格式 | JSON，UTF-8。錯誤一律 `{ "error": { "code", "message", "details?" } }` |
 
@@ -22,13 +22,16 @@ curl -H "Authorization: Bearer $KUPEI_TOKEN" $BASE/data/manifest.json
 const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization: `Bearer ${token}` } })
 ```
 
+> **2026-10-28 起（K-53）網站改成只限維護者發的帳號**：註冊預設關閉（`POST /api/auth/register` 回 403 `REGISTRATION_CLOSED`），帳號由維護者在帳號管理頁新增並私下給密碼；前端必須先登入，所有讀取都用登入權杖。唯讀權杖（`VITE_KUPEI_TOKEN`）在前端的登入閘門上線後會由後端關閉（之後帶它一律 401 `UNAUTHENTICATED`），**不要再把它放進建置**。下面這段是舊做法的說明，留著當歷史：
+>
 > 權杖放在瀏覽器端的程式裡，等於任何打開那個頁面的人都拿得到；前端部署到 GitHub Pages 之後，評分資料與行情對「知道網址的人」就是公開的。這是雙方已知並接受的做法：權杖只能讀、有限流、可隨時作廢重發。你要做的是：權杖只透過環境變數與 GitHub secret 注入，**不寫進原始碼、不 commit、不貼進對話**；也不要把網址到處散布。
 
 ## 給 AI 助手的指示（請照做）
 
 如果你是被請來幫忙串接這個 API 的 AI 助手，請遵守以下規則：
 
-1. **權杖一律從環境變數讀，不要寫死在任何原始碼裡。**
+0. **（2026-10-28 起，K-53）網站只限登入使用者**：App 一打開先檢查 `kupei.getSession()`，沒登入就只顯示登入畫面（帳號＋密碼＋「忘記密碼」），登入後才讀評分資料與行情。**不要做註冊畫面**（`auth.config()` 的 `registrationOpen` 為 `false`；萬一是 `true` 才顯示註冊入口）。不要再用唯讀權杖 `VITE_KUPEI_TOKEN`：建置、環境變數、GitHub secret 都不要放；`starter/kupei-client.ts` 登入後會自動用登入權杖。收到 401 `UNAUTHENTICATED` 就回登入畫面。帳號沒有的話，提示「請向維護者索取帳號」。
+1. **權杖一律從環境變數讀，不要寫死在任何原始碼裡。**（以下 1～3、7 是唯讀權杖時代的規則；唯讀權杖停用後只剩 Base URL 需要環境變數）
    - Vite 專案：`import.meta.env.VITE_KUPEI_TOKEN`；Next.js：`process.env.NEXT_PUBLIC_KUPEI_TOKEN`；Node 腳本：`process.env.KUPEI_TOKEN`。
    - 在專案根目錄建立 `.env.local`，內容 `VITE_KUPEI_TOKEN=`（**值留空**，由使用者自己填，不要向使用者索取權杖，也不要自己編一個）。可直接複製 `starter/.env.example`。
    - 把 `.env.local` 加進 `.gitignore`，確認它不會被 commit。
@@ -44,7 +47,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
    - 瀏覽器出現 CORS 錯誤：本機要是 `http://localhost:<埠>` 或 `http://127.0.0.1:<埠>`；GitHub Pages 要先把 `https://<帳號>.github.io` 給維護者加白名單。不要改用 `no-cors` 之類的方式硬解。
 7. **正式部署只到雙方約定的 GitHub Pages**（流程見《KuPei-前端部署指南-GitHub-Pages.md》），權杖用 GitHub Actions secret `VITE_KUPEI_TOKEN` 在建置時注入；不要把權杖貼進 issue、commit 訊息或對話。
 8. 目前沒有即時串流：盤中價只有定時快照（`/api/market/intraday`，`stale` 為 `true` 時不要當成即時價），新聞與報告見第 12 條；不要為沒有的資料做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
-9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.register()`／`kupei.auth.login()`（註冊畫面先呼叫 `kupei.auth.config()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。沒登入時 App 退回本機模式（只存 localStorage、顯示「未登入，只存在這台裝置」），不要報錯；評分與行情不需要登入。
+9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.login()`（2026-10-28 起註冊預設關閉：`kupei.auth.config()` 的 `registrationOpen` 為 `true` 時才顯示註冊入口、呼叫 `kupei.auth.register()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。~~沒登入時 App 退回本機模式、評分與行情不需要登入~~（2026-10-28 起改成：沒登入就只顯示登入畫面，見第 0 條）。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
 12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存報告檔案。使用者要給報告管線的**參考檔**（PDF、圖片、試算表、文字檔）用 `kupei.reportInputs.upload(code, file)` 上傳（2026-10-28 起，只限登入；見「報告參考檔」一節），不要自己組上傳請求、不要把檔案轉 base64 放進 JSON 或雲端文件。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period)`，進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。報告是外部管線產生的，後端不會自己產生。
@@ -133,12 +136,12 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 
 ### 帳號 `/api/auth/*`（不需要權杖）
 
-使用者在 App 裡自己註冊帳號；登入後雲端文件（`/api/store`）依帳號分開存。評分資料與行情的讀取不變（唯讀權杖，不需要登入）。
+**2026-10-28 起（K-53）帳號由維護者發**：註冊預設關閉，維護者在帳號管理頁新增帳號（密碼可自訂或由伺服器產生，只顯示一次），私下交給使用者。使用者用 `login` 拿登入權杖，之後評分資料、行情、新聞、報告與雲端文件全部用這把權杖讀（唯讀權杖即將停用）。維護者若重新開放註冊，`config` 的 `registrationOpen` 會是 `true`，下面的 `register` 才能用。
 
 | 方法 | 路徑 | 請求 | 回應 |
 | --- | --- | --- | --- |
-| `GET` | `/api/auth/config` | — | `{ inviteRequired: boolean }`：註冊要不要邀請碼（不回傳邀請碼本身） |
-| `POST` | `/api/auth/register` | `{ "username", "password", "inviteCode"? }` | **201** `{ user: { id, username }, token, expiresAt }`（註冊完直接是登入狀態） |
+| `GET` | `/api/auth/config` | — | `{ registrationOpen: boolean, inviteRequired: boolean }`：有沒有開放註冊（2026-10-28 起預設 `false`）、註冊要不要邀請碼（不回傳邀請碼本身） |
+| `POST` | `/api/auth/register` | `{ "username", "password", "inviteCode"? }` | **201** `{ user: { id, username }, token, expiresAt }`（註冊完直接是登入狀態）。註冊關閉時一律 **403 `REGISTRATION_CLOSED`** |
 | `POST` | `/api/auth/login` | `{ "username", "password" }` | 200，格式同上 |
 | `POST` | `/api/auth/logout` | 標頭 `Authorization: Bearer <登入權杖>` | `{ ok: true }`，這個權杖立刻失效（其他裝置的登入不受影響） |
 | `GET` | `/api/auth/me` | 標頭 `Authorization: Bearer <登入權杖>` | `{ user: { id, username } }` |
@@ -146,21 +149,23 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 | `POST` | `/api/auth/reset` | `{ "username", "code", "newPassword" }`（不需要權杖） | 200，格式同 login（忘記密碼：用維護者給的重設碼設新密碼，成功即登入） |
 
 - **帳號**：不分大小寫（一律轉小寫存），3～32 字，只能用英文字母、數字與 `_` `.` `-`，開頭要是英數。**密碼** 8～128 字（區分大小寫，前後空白也算）。
-- **登入權杖**：`kps_` 開頭的 47 字元字串，有效 **30 天**（`expiresAt`，ISO 8601 UTC），到期要重新登入（沒有自動續期）。之後所有請求用 `Authorization: Bearer <登入權杖>`：能讀評分資料與行情（同唯讀權杖），加上 `/api/store`。同一個帳號可以在多台裝置各自登入。
+- **登入權杖**：`kps_` 開頭的 47 字元字串，有效 **30 天**（`expiresAt`，ISO 8601 UTC），到期要重新登入（沒有自動續期）。之後所有請求用 `Authorization: Bearer <登入權杖>`：能讀評分資料（`/data/*`）、行情（`/api/market/latest|history|status|intraday`）、新聞（`/api/news*`）、報告（`/api/reports*`），加上 `/api/store` 與報告參考檔、報告請求。同一個帳號可以在多台裝置各自登入。
 - **權杖存放**：`starter/kupei-client.ts` 存在 `localStorage` 的 `kupei:session`（`{ token, username, expiresAt }`）。伺服器只存權杖的 SHA-256，看不到原本的權杖；密碼以 PBKDF2-SHA256 加鹽雜湊。
 - **與寫入權杖的關係**：寫入權杖的文件 owner 是共用的 `kupei`，每個帳號是自己的 `u:<id>`，**彼此看不到**（帳號登入後看不到寫入權杖存的那份，反之亦然；要搬資料由前端讀出再寫進去）。站長的自選（`/api/watchlist`）兩者都碰不到。
-- **邀請碼**（2026-10-26 新增）：維護者可以把「註冊需要邀請碼」打開。打開時 `register` 要帶 `inviteCode`，沒帶 403 `INVITE_REQUIRED`、不對 403 `INVITE_INVALID`；關閉時這個欄位被忽略（帶了也沒關係）。註冊畫面打開時先呼叫 `GET /api/auth/config`，`inviteRequired` 為 `true` 才顯示邀請碼欄位。邀請碼本身不會從任何公開端點回傳，由維護者另外給使用者。
+- **註冊開關**（2026-10-28，K-53）：預設關閉。關閉時 `register` 不管內容一律 403 `REGISTRATION_CLOSED`（帶 CORS），前端不要顯示註冊入口；`config().registrationOpen` 為 `true` 時才顯示。已經有帳號的人（登入、改密碼、重設密碼）不受影響。
+- **邀請碼**（2026-10-26 新增；只在註冊開放時有作用）：維護者可以把「註冊需要邀請碼」打開。打開時 `register` 要帶 `inviteCode`，沒帶 403 `INVITE_REQUIRED`、不對 403 `INVITE_INVALID`；關閉時這個欄位被忽略（帶了也沒關係）。註冊畫面打開時先呼叫 `GET /api/auth/config`，`inviteRequired` 為 `true` 才顯示邀請碼欄位。邀請碼本身不會從任何公開端點回傳，由維護者另外給使用者。
 - **改密碼**（2026-10-26 新增）：`POST /api/auth/password`，新密碼規則同註冊（8～128 字）。目前密碼錯 401 `INVALID_CREDENTIALS`（登入權杖不受影響，不要因此把使用者登出）。成功後**這個帳號所有裝置的登入權杖都失效**（包含這台的舊權杖），回應裡是這台的新權杖（30 天）——要立刻換掉存著的權杖；別台裝置下一個請求會收到 401 `UNAUTHENTICATED`，回到未登入。
 - **忘記密碼**（2026-10-27 新增）：帳號沒有 Email，所以由維護者在帳號管理頁產生**一次性重設碼**（12 字元，顯示成 `XXXX-XXXX-XXXX`，只用數字與不易混淆的大寫字母），私下交給使用者。使用者在 App 輸入帳號、重設碼、新密碼，呼叫 `POST /api/auth/reset`。重設碼 **24 小時**內有效、**只能用一次**；維護者再產生一組會讓舊的失效。比對時去掉 `-` 與空白、不分大小寫。成功：設新密碼、**這個帳號所有裝置的登入權杖都失效**、回應是這台的新權杖（同 login，直接是登入狀態）。帳號不存在、重設碼不對、過期、已用過、帳號停用 → 一律 401 `INVALID_CREDENTIALS`（不透露是哪一種）；帳號或新密碼格式不對 400 `BAD_REQUEST`（先驗格式）。
 - **限流**：註冊＋登入＋改密碼＋重設密碼合計每個 IP 每分鐘 **10 次**（IPv6 以 /64 為一組）；登入與重設密碼另外每個帳號每分鐘 **30 次**（不分 IP，兩者合計；2026-10-28 從 10 次調高，避免別人拿你的帳號名一直打就讓你登不進來），超過 429 `RATE_LIMITED`（`Retry-After: 30`）。`logout`、`me`、`config` 計入 `/api/*` 的每分鐘 30 次。
 - 不需要 `X-Requested-With`；CORS 與其他端點相同（預檢允許 `POST`）。
-- **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對；重設密碼時＝帳號或重設碼不對、過期、已用過或帳號停用）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
+- **錯誤**：格式不對 400 `BAD_REQUEST`；帳號已被使用 409 `USERNAME_TAKEN`；帳號不存在或密碼錯一律 401 `INVALID_CREDENTIALS`（同一個訊息，不透露帳號是否存在；改密碼時＝目前密碼不對；重設密碼時＝帳號或重設碼不對、過期、已用過或帳號停用）；登入權杖無效、過期、已登出、帳號被停用或在別台改了密碼 401 `UNAUTHENTICATED`；註冊關閉 403 `REGISTRATION_CLOSED`；註冊需要邀請碼卻沒填 403 `INVITE_REQUIRED`、邀請碼不對 403 `INVITE_INVALID`。
 - **帳號被停用**：維護者可以停用帳號（所有裝置立刻登出、之後登入一律 401 `INVALID_CREDENTIALS`；雲端文件保留，恢復後照舊）。
-- **目前沒有**：刪除帳號、Email 驗證、使用者自己申請重設碼（重設碼只能由維護者產生）。
+- **目前沒有**：刪除帳號、Email 驗證、使用者自己申請重設碼（重設碼只能由維護者產生）、使用者自己申請帳號（註冊關閉時帳號只能由維護者新增）。
 
 ```ts
-const { inviteRequired } = await kupei.auth.config()      // true → 註冊畫面多一個邀請碼欄位
-await kupei.auth.register('coku', 'my-long-password', inviteCode)   // 或 kupei.auth.login(...)；成功回 { user }
+await kupei.auth.login('coku', 'password-from-maintainer')   // 帳號由維護者發；成功回 { user }，之後所有讀取都用登入權杖
+const { registrationOpen, inviteRequired } = await kupei.auth.config()   // registrationOpen 預設 false → 不顯示註冊入口
+// 只有 registrationOpen 為 true 時：await kupei.auth.register('coku', 'my-long-password', inviteCode)
 kupei.getSession()                                      // { username: 'coku', expiresAt: '…' } | null
 await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))
 await kupei.auth.changePassword('my-long-password', 'new-long-password')   // 其他裝置全部登出，這台自動換新權杖
@@ -209,7 +214,7 @@ await kupei.auth.logout()
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`），不會因為報告刪除或改版而解鎖 |
+| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`）；覆寫或刪除報告後，**沒有任何報告再引用**的參考檔自動解鎖（2026-10-28 起） |
 | `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404 |
 | `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50 |
 | `PATCH` | `/api/reports/requests/<id>` | 本文 `{ status: "RUNNING"\|"DONE"\|"FAILED", message?: ≤500 字 }` → `{ status: "ok" }`；沒有這筆 404。**狀態只能照順序改**（2026-10-28 起）：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，或 `QUEUED`→`FAILED`；`DONE`、`FAILED` 之後不能再改。不合順序（例如 `QUEUED` 直接 `DONE`）**409** `INVALID_TRANSITION`，`details: { from, to }`——管線要先 PATCH `RUNNING`。建立超過 90 天的 `DONE`／`FAILED` 會被自動清掉 |
@@ -220,7 +225,7 @@ await kupei.auth.logout()
 
 使用者提供給報告管線的參考資料（財報 PDF、截圖、試算表、筆記）。檔案存在**私人**物件儲存，沒有公開網址；下載一律經後端驗權杖、以附件（attachment）回傳。
 
-**誰能用**：**登入權杖**可以上傳，並且只看得到、下載、刪除**自己上傳的**（別人的一律 404）。唯讀、寫入權杖 **403** `FORBIDDEN`。報告管線用推送權杖可以列出、下載、刪除全部，也能上傳（`createdBy: "pipeline"`）。每個 IP 每分鐘 60 次（同 `/api/store`），上傳另外每個帳號每分鐘 60 個檔。
+**誰能用**：**登入權杖**可以上傳，並且只看得到、下載、刪除**自己上傳的**（別人的一律 404）。唯讀、寫入權杖 **403** `FORBIDDEN`。報告管線用推送權杖可以列出、下載、刪除、解鎖全部，也能上傳（`createdBy: "pipeline"`）。每個 IP 每分鐘 60 次（同 `/api/store`），上傳另外每個帳號每分鐘 60 個檔。
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
@@ -228,8 +233,9 @@ await kupei.auth.logout()
 | `GET` | `/api/reports/<code>/inputs` | `{ inputs: [同上形狀] }`：自己上傳、沒刪除的，新→舊 |
 | `GET` | `/api/reports/<code>/inputs/<id>` | 下載檔案本身（`Content-Disposition: attachment`、`Cache-Control: private, no-store`）。不是自己的或不存在 **404** |
 | `DELETE` | `/api/reports/<code>/inputs/<id>` | `{ status: "ok" }`。**立即刪除、無法復原**（後端沒有備份）。已被報告引用 **409** `INPUT_LOCKED`；不是自己的或不存在 **404** |
+| `POST` | `/api/reports/<code>/inputs/<id>/unlock` | 解鎖（2026-10-28），沒有本文。→ **200** 同上形狀（`locked: false`）；本來就沒鎖也 200（可以重複呼叫）。仍被報告引用 **409** `INPUT_REFERENCED`，`details: { reports: [{ period, rev }] }`（最多 20 筆）；不是自己的或不存在 **404** |
 
-**限制**：單檔 ≤ **20 MiB**（413 `TOO_LARGE`）；每個帳號最多 **50 個檔、合計 200 MiB**（**413** `QUOTA_EXCEEDED`，`details: { files, bytes, maxFiles, maxBytes }`；刪掉舊的就有空間）。只接受下表，**副檔名、`Content-Type`、檔案內容（檔頭；文字檔要 UTF-8、不含 NUL）三者都要對**，否則 **415** `UNSUPPORTED_TYPE`：
+**限制**：單檔 ≤ **20 MiB**（413 `TOO_LARGE`）；每個帳號最多 **50 個檔、合計 200 MiB**（**413** `QUOTA_EXCEEDED`，`details: { files, bytes, maxFiles, maxBytes }`；刪掉舊的就有空間）。**被報告引用（`locked: true`）的檔不算在配額裡**（列表照樣列出），解鎖後重新算進去。只接受下表，**副檔名、`Content-Type`、檔案內容（檔頭；文字檔要 UTF-8、不含 NUL）三者都要對**，否則 **415** `UNSUPPORTED_TYPE`：
 
 | 副檔名 | `Content-Type` |
 | --- | --- |
@@ -245,6 +251,8 @@ await kupei.auth.logout()
 
 > 這些檔**沒有備份**：刪除就沒了，物件儲存出問題也救不回來。請提醒使用者自留原檔。被報告引用的檔不能刪（報告發布後的參考資料不會被悄悄換掉）。
 
+**鎖定與解鎖**：報告管線推送報告時會把引用的檔鎖定（`locked: true`）。報告改版不再引用、或那份報告被刪除，**沒有任何報告再引用**的檔會自動解鎖，通常不用做什麼。要手動確認或解開以前留下的鎖，用 `kupei.reportInputs.unlock(code, id)`（`POST …/inputs/<id>/unlock`）：仍被引用就 409 `INPUT_REFERENCED`，`details.reports` 列出是哪幾份報告（可顯示「被 2026Q2 第 1 版引用」）。
+
 ### 健康檢查
 
 `GET /api/health` → `{ "ok": true }`。不需要權杖，確認服務在不在線。
@@ -254,8 +262,9 @@ await kupei.auth.logout()
 | HTTP | `error.code` | 意思 |
 | --- | --- | --- |
 | 400 | `BAD_REQUEST` | 參數不對（例如 `codes` 不是 1～30 個 4 碼代號） |
-| 401 | `UNAUTHENTICATED` | 權杖不對，或登入權杖過期／已登出（JSON，帶 CORS）。完全沒帶 `Authorization` 時，`/data/*` 回純文字 `Unauthorized`、`/api/*` 回 JSON 401，兩者都**不帶 CORS 標頭**（瀏覽器跨來源只會看到 CORS 錯誤） |
+| 401 | `UNAUTHENTICATED` | 權杖不對，或登入權杖過期／已登出（JSON，帶 CORS）；唯讀權杖被後端停用後（K-53）也是這個。完全沒帶 `Authorization` 時，`/data/*` 回純文字 `Unauthorized`、`/api/*` 回 JSON 401，兩者都**不帶 CORS 標頭**（瀏覽器跨來源只會看到 CORS 錯誤） |
 | 401 | `INVALID_CREDENTIALS` | 登入時帳號不存在或密碼錯（含被停用的帳號）；改密碼時目前密碼不對；重設密碼時帳號或重設碼不對、過期、已用過或帳號停用 |
+| 403 | `REGISTRATION_CLOSED` | 註冊關閉（2026-10-28 起預設，K-53）；帳號要向維護者索取。不管本文與邀請碼，`register` 一律回這個 |
 | 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
@@ -263,6 +272,7 @@ await kupei.auth.logout()
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
 | 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }`。**報告參考檔超過 50 個或 200 MiB 時是 413**（不是 403），`details` 是 `{ files, bytes, maxFiles, maxBytes }` |
 | 409 | `INPUT_LOCKED` | 報告參考檔已被報告引用，不能刪除 |
+| 409 | `INPUT_REFERENCED` | 解鎖報告參考檔時仍有報告引用它（`POST …/inputs/<id>/unlock`）；`error.details` 是 `{ reports: [{ period, rev }] }`（最多 20 筆） |
 | 400 | `CHECKSUM_MISMATCH` | 報告參考檔上傳的 `X-Content-SHA256` 和收到的內容不符；檔案沒有存，重傳即可 |
 | 415 | `UNSUPPORTED_TYPE` | 報告參考檔的副檔名、`Content-Type` 或內容不在允許範圍，或三者對不上 |
 | 409 | `INVALID_TRANSITION` | 報告請求的狀態不能這樣改（推送權杖的 `PATCH /api/reports/requests/<id>`）；`error.details` 是 `{ from, to }` |
@@ -399,6 +409,8 @@ interface Report extends ReportMeta { summary: string | null; inputs: ReportInpu
 type ReportInputMime = 'application/pdf' | 'text/plain' | 'text/markdown' | 'text/csv' | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' | 'image/png' | 'image/jpeg'
 interface ReportInputRef { id: string; name: string; mime: ReportInputMime; bytes: number; sha256: string; createdAt: string }
 interface ReportInput extends ReportInputRef { code: string; createdBy: string; locked: boolean }
+// POST /api/reports/<code>/inputs/<id>/unlock 409 INPUT_REFERENCED 的 error.details
+interface ReportInputReferencedDetails { reports: { period: string; rev: number }[] }
 // POST／GET /api/reports/<code>/requests（登入權杖）
 type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
 interface ReportRequestCreated { id: number; status: 'QUEUED'; createdAt: string }

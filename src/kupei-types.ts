@@ -270,8 +270,11 @@ export interface AuthResponse {
   expiresAt: string
 }
 
-/** GET /api/auth/config：註冊要不要邀請碼（不回傳邀請碼本身）。打開時註冊畫面要多一個「邀請碼」欄位 */
+/** GET /api/auth/config：有沒有開放註冊、註冊要不要邀請碼（不回傳邀請碼本身） */
 export interface AuthConfig {
+  /** false（2026-10-28 起預設，K-53）＝註冊關閉、帳號由維護者發，不要顯示註冊入口；true 才能 register */
+  registrationOpen: boolean
+  /** true＝註冊畫面要多一個「邀請碼」欄位（只在 registrationOpen 為 true 時有意義） */
   inviteRequired: boolean
 }
 
@@ -397,8 +400,16 @@ export interface ReportInput extends ReportInputRef {
   code: string
   /** 'u:<帳號 id>'（帳號上傳）或 'pipeline'（報告管線） */
   createdBy: string
-  /** 已被報告引用：不能刪（DELETE 回 409 INPUT_LOCKED） */
+  /**
+   * 已被報告引用：不能刪（DELETE 回 409 INPUT_LOCKED），也不計入上傳者的配額（每人 50 個／200 MiB）。
+   * 報告改版或刪除後不再被任何報告引用時後端自動改回 false；也可以手動 POST …/inputs/<id>/unlock（kupei.reportInputs.unlock）。
+   */
   locked: boolean
+}
+
+/** POST /api/reports/<code>/inputs/<id>/unlock 被拒（409 INPUT_REFERENCED）時 error.details 的形狀：仍引用它的報告（period 新→舊、rev 新→舊，最多 20 筆） */
+export interface ReportInputReferencedDetails {
+  reports: { period: string; rev: number }[]
 }
 
 export type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'

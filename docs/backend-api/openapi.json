@@ -3,7 +3,7 @@
   "info": {
     "title": "KuPei 唯讀 API",
     "version": "1.0.0",
-    "description": "評分資料與每日收盤行情的唯讀介面。人類可讀的說明、資料型別與排序規則見 KuPei-API.md。 使用者帳號（/api/auth/*）登入後可讀寫自己的雲端文件。 所有 /api/* 的 HEAD 與 GET 相同（權杖、權限、限流、狀態碼與標頭），只是沒有本文。"
+    "description": "評分資料與每日收盤行情的唯讀介面。人類可讀的說明、資料型別與排序規則見 KuPei-API.md。 使用者帳號（/api/auth/*）登入後可讀寫自己的雲端文件。 所有 /api/* 的 HEAD 與 GET 相同（權杖、權限、限流、狀態碼與標頭），只是沒有本文。 2026-10-28 起（K-53）網站只限維護者發的帳號：註冊預設關閉（403 REGISTRATION_CLOSED），前端登入後一律用登入權杖讀取；唯讀權杖在前端登入閘門上線後停用（之後 401 UNAUTHENTICATED）。"
   },
   "servers": [
     {
@@ -20,7 +20,7 @@
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "唯讀權杖（評分、行情）、使用者登入權杖 kps_…（多了 /api/store，依帳號分開）或寫入權杖（多了 /api/store，共用一份）。寫入權杖由使用者在 App 輸入，不進建置"
+        "description": "使用者登入權杖 kps_…（2026-10-28 起前端唯一的方式：評分、行情、新聞、報告、/api/store 依帳號分開）、唯讀權杖（評分、行情；即將停用，後端 READ_TOKEN_ENABLED=false 後一律 401）或寫入權杖（多了 /api/store，共用一份）。寫入權杖由使用者在 App 輸入，不進建置"
       },
       "ingest": {
         "type": "http",
@@ -55,6 +55,7 @@
                   "NOT_FOUND",
                   "INVALID_CREDENTIALS",
                   "USERNAME_TAKEN",
+                  "REGISTRATION_CLOSED",
                   "INVITE_REQUIRED",
                   "INVITE_INVALID",
                   "INVALID_TRANSITION"
@@ -638,12 +639,17 @@
       "AuthConfig": {
         "type": "object",
         "required": [
+          "registrationOpen",
           "inviteRequired"
         ],
         "properties": {
+          "registrationOpen": {
+            "type": "boolean",
+            "description": "true＝開放註冊；false（2026-10-28 起預設）＝註冊關閉，帳號由維護者發，前端不要顯示註冊入口"
+          },
           "inviteRequired": {
             "type": "boolean",
-            "description": "true＝註冊要填邀請碼（不回傳邀請碼本身）"
+            "description": "true＝註冊要填邀請碼（不回傳邀請碼本身；只在 registrationOpen 為 true 時有意義）"
           }
         }
       },
@@ -930,7 +936,7 @@
               "type": "string",
               "pattern": "^in_[0-9a-f]{32}$"
             },
-            "description": "引用的參考檔 id（同一家公司、未刪除；推送後鎖定、不能刪）。不存在或已刪除 400 BAD_REQUEST，details: { missing }"
+            "description": "引用的參考檔 id（同一家公司、未刪除；推送後鎖定、不能刪）。不存在或已刪除 400 BAD_REQUEST，details: { missing }。覆寫或刪除報告後，沒有任何報告再引用的參考檔自動解鎖"
           }
         },
         "description": "本文最多 300 KB"
@@ -1127,11 +1133,42 @@
               },
               "locked": {
                 "type": "boolean",
-                "description": "已被報告引用：不能刪（409 INPUT_LOCKED）"
+                "description": "已被報告引用：不能刪（409 INPUT_LOCKED），也不計入上傳者的配額。沒有任何報告再引用時自動改回 false（報告覆寫或刪除時），也可以 POST …/unlock"
               }
             }
           }
         ]
+      },
+      "ReportInputReferencedDetails": {
+        "type": "object",
+        "description": "POST /api/reports/{code}/inputs/{id}/unlock 409 INPUT_REFERENCED 的 error.details",
+        "required": [
+          "reports"
+        ],
+        "properties": {
+          "reports": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "仍引用這個參考檔的報告，period 新→舊、rev 新→舊",
+            "items": {
+              "type": "object",
+              "required": [
+                "period",
+                "rev"
+              ],
+              "properties": {
+                "period": {
+                  "type": "string",
+                  "pattern": "^\\d{4}Q[1-4]$"
+                },
+                "rev": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
       }
     },
     "responses": {
@@ -2048,7 +2085,7 @@
     },
     "/api/auth/register": {
       "post": {
-        "summary": "註冊帳號並直接登入",
+        "summary": "註冊帳號並直接登入（2026-10-28 起預設關閉）",
         "security": [],
         "requestBody": {
           "required": true,
@@ -2082,7 +2119,7 @@
             }
           },
           "403": {
-            "description": "INVITE_REQUIRED：註冊需要邀請碼但沒填；INVITE_INVALID：邀請碼不對",
+            "description": "REGISTRATION_CLOSED：註冊關閉（預設，最先檢查）；INVITE_REQUIRED：註冊需要邀請碼但沒填；INVITE_INVALID：邀請碼不對",
             "content": {
               "application/json": {
                 "schema": {
@@ -2114,7 +2151,8 @@
               }
             }
           }
-        }
+        },
+        "description": "註冊關閉（預設）時不管本文與邀請碼一律 403 REGISTRATION_CLOSED；帳號由維護者新增。開放時才照下面的規則。"
       }
     },
     "/api/auth/login": {
@@ -2361,7 +2399,7 @@
     },
     "/api/auth/config": {
       "get": {
-        "summary": "註冊設定（要不要邀請碼）",
+        "summary": "註冊設定（有沒有開放註冊、要不要邀請碼）",
         "security": [],
         "description": "不需要權杖；計入 /api 每分鐘 30 次",
         "responses": {
@@ -3228,7 +3266,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "413": {
-            "description": "TOO_LARGE（單檔超過 20 MiB）或 QUOTA_EXCEEDED（超過 50 個或 200 MiB；details: { files, bytes, maxFiles, maxBytes }）",
+            "description": "TOO_LARGE（單檔超過 20 MiB）或 QUOTA_EXCEEDED（未鎖定的檔超過 50 個或 200 MiB；被報告鎖定的不算；details: { files, bytes, maxFiles, maxBytes }）",
             "content": {
               "application/json": {
                 "schema": {
@@ -3417,6 +3455,79 @@
           },
           "409": {
             "description": "已被報告引用（INPUT_LOCKED）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/reports/{code}/inputs/{id}/unlock": {
+      "post": {
+        "summary": "解鎖參考檔（2026-10-28）",
+        "description": "沒有任何報告再引用時把 locked 改回 false（＋稽核 unlock），之後可以刪、也重新計入配額。本來就沒鎖也 200 照回（冪等）。報告覆寫或刪除後不再被引用的檔會自動解鎖，通常不用呼叫。沒有本文。登入權杖（kps_）只限自己上傳的；推送權杖（報告管線）可解全部。唯讀、寫入權杖與站長 cookie 403。每個 IP 每分鐘 60 次（WRITE_LIMIT）",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "$ref": "#/components/parameters/InputId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "解鎖後（或本來就沒鎖）的 metadata，locked: false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportInput"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "code 格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "沒有這個參考檔，或不是自己上傳的（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "仍被報告引用（INPUT_REFERENCED）；error.details 是 ReportInputReferencedDetails",
             "content": {
               "application/json": {
                 "schema": {
