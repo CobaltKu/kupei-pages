@@ -44,7 +44,8 @@ for (const [from, entries] of sources) {
   for (const [k, v] of entries) {
     if (typeof v !== 'string' || v.length < 8) continue
     const secretish = k === 'VITE_KUPEI_TOKEN' || SECRET_NAME.test(k)
-    const longVite = k.startsWith('VITE_') && v.length >= 32
+    // 公開網址（例如 VITE_KUPEI_BASE 後端位址）本來就會進建置，不算權杖；名稱像權杖的照樣檢查
+    const longVite = k.startsWith('VITE_') && v.length >= 32 && !/^https?:\/\/[^\s]*$/.test(v)
     if (secretish || longVite) wanted.push({ name: k, from, value: v })
   }
 }

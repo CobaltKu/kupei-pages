@@ -76,3 +76,16 @@ test('檢查器：一般程式（長識別字、網址、短字串）不誤判',
     fs.rmSync(d, { recursive: true, force: true })
   }
 })
+
+test('檢查器：公開網址的設定值（CI 的 VITE_KUPEI_BASE）進了產物不算權杖', () => {
+  const dir = tmp('url')
+  try {
+    const base = 'https://kupei-dashboard.example-account.workers.dev'
+    fs.writeFileSync(path.join(dir, 'a.js'), `const b = "${base}";\n`)
+    const r = check(dir, { VITE_KUPEI_BASE: base })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    // 名稱像權杖的變數就算值是網址也照樣抓
+    const r2 = check(dir, { VITE_KUPEI_TOKEN: base })
+    assert.notEqual(r2.status, 0)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
