@@ -15,8 +15,9 @@
 //   await seedSession(ctx, 't-user')      // 這個 context 第一次開頁面時就是已登入（之後登出不會再自動登入）
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const here = path.dirname(new URL(import.meta.url).pathname)
+const here = path.dirname(fileURLToPath(import.meta.url))
 export const SESSION = process.env.KUPEI_TEST_SESSION || ''
 export const MODE = SESSION ? 'live' : 'fixture'
 const FX = MODE === 'fixture' ? JSON.parse(fs.readFileSync(process.env.KP_FIXTURE || path.join(here, 'fixtures/kupei-data.json'), 'utf8')) : null

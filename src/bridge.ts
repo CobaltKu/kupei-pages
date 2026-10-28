@@ -960,7 +960,7 @@ async function req(method: string, path: string, body?: unknown, headers?: Recor
       if (!Q_CODE.test(seg[2] || '')) return { ok: false, status: 400, data: { error_code: 'COMPANY_NOT_FOUND' } }
       return questionsReq(m, seg, qs, body, headers && typeof headers === 'object' ? headers : {})
     }
-    // 報告：/reports/<代號>、/reports/<代號>/<期別>/<版次>、POST /reports/<代號>/requests；/inputs（上傳參考資料）後端不支援
+    // 報告：/reports/<代號>、/reports/<代號>/<期別>/<版次>、POST /reports/<代號>/requests；參考檔走 window.KupeiInputs（上傳要帶 File、下載回 Blob，不經這個 req）
     if (seg[1] === 'reports' && /^\d{4}$/.test(seg[2] || '')) {
       const code = seg[2]
       if (m === 'GET' && seg.length === 3) return await reportList(code)
@@ -996,6 +996,23 @@ async function req(method: string, path: string, body?: unknown, headers?: Recor
   }
   // 自選、設定、登入、報告參考資料：Pages 版沒有對應的後端端點，UI 走本機模式或顯示「尚未提供」
   return no(404)
+}
+
+/**
+ * 報告參考檔（C-05，2026-10-28）：只限登入，只看得到、下載、刪除自己上傳的。包 starter 的 reportInputs，
+ * 錯誤轉成 { ok:false, status, data:{ error_code } }（UI 用 error_code 顯示訊息）。畫面只拿白名單欄位：不帶 createdBy。
+ */
+const pickInput = (x: any): Json => ({ id: String(x.id), name: String(x.name), mime: String(x.mime), bytes: Number(x.bytes) || 0, sha256: String(x.sha256 || ''), createdAt: x.createdAt ?? null, locked: x.locked === true })
+const inputReply = async (fn: () => Promise<unknown>): Promise<Reply> => {
+  try { return ok(await fn()) } catch (e) {
+    return e instanceof KupeiError ? { ok: false, status: e.status, data: { error_code: e.code } } : { ok: false, status: 0, data: null }
+  }
+}
+const inputs = {
+  list: (code: string) => inputReply(async () => (await client.reportInputs.list(code)).map(pickInput)),
+  upload: (code: string, file: File) => inputReply(async () => pickInput(await client.reportInputs.upload(code, file))),
+  download: (code: string, id: string) => inputReply(() => client.reportInputs.download(code, id)),
+  remove: (code: string, id: string) => inputReply(() => client.reportInputs.remove(code, id)),
 }
 
 const api = {
@@ -1607,6 +1624,7 @@ async function startApp() {
   document.getElementById('kp-gate')?.remove()
   document.documentElement.classList.remove('kp-locked')
   ;(window as any).KupeiAPI = api
+  ;(window as any).KupeiInputs = inputs
   // 先把雲端資料合併進本機（最多等 4 秒），UI 才讀 localStorage
   if (canSync()) {
     const pull = pullAll()

@@ -1054,10 +1054,11 @@ function rsRender(){
   if(!RP.id){$('rs-panel').innerHTML='<div class="placeholder">請先把公司加入自選群組。</div>';return;}
   var s=rsGet(RP.id),r=BYID[RP.id];
   var h='<div style="display:flex;align-items:center;gap:10px"><h2>'+esc(r.id)+' '+esc(r.name)+'</h2><span class="grow"></span><span id="rs-genbox"><button class="btn primary" disabled title="報告流程契約交付後開放">產生報告（尚未開放）</button></span></div><div class="sub" id="rs-reqstate"></div>';
+  if(PAGES)h+='<div class="placeholder">目前「產生報告」只送出公司與期別；下方的關鍵字、納入新聞、與上一期比較、重點大項與參考檔選擇，要等後端報告契約（REPORT-01）完成後才會帶入報告。報告為規則式整理（不是 AI 撰寫）。</div>';
   h+='<div class="field"><label class="k">報告關鍵字（最多 10 個，預設帶入個股新聞關鍵字；產業背景每份最多收 10 則）</label>'+chipBox(s.kw,'kw','r'+RP.id,10,'輸入後按 Enter')+'</div>';
   var sd=s.time?s.time.slice(0,10):'',st=s.time?s.time.slice(11,16):'08:00',topt='';
   for(var hh2=0;hh2<24;hh2++)for(var mm=0;mm<60;mm+=30){var tv=String(hh2).padStart(2,'0')+':'+(mm?'30':'00');topt+='<option value="'+tv+'"'+(tv===st?' selected':'')+'>'+tv+'</option>';}
-  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">排程時間（選填；不設定則只能手動產生）</span><div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+calHtml(sd)+
+  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">'+(PAGES?'排程時間（尚未啟用：目前只保存設定，不會自動產生，請用「產生報告」手動送出）':'排程時間（選填；不設定則只能手動產生）')+'</span><div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+calHtml(sd)+
     '<div style="display:flex;flex-direction:column;gap:8px"><span style="font-size:12px;color:var(--text2)">'+(sd?'已選 '+esc(sd.replace(/-/g,'/'))+'（'+'日一二三四五六'.charAt(new Date(sd+'T00:00').getDay())+'）':'尚未選日期')+'</span><label class="sr" for="rs-tm">時間</label><select class="inp" id="rs-tm"'+(sd?'':' disabled')+'>'+topt+'</select>'+(s.time?'<button class="btn sm" data-rsclear="1" style="align-self:flex-start">清除排程</button>':'')+'</div></div>'+(s.status?'<div class="sub">排程狀態：'+esc({SCHEDULED:'已排程',PAUSED:'暫停（已移出自選）',EXPIRED:'已過期，未補跑',CANCELLED:'已取消',DONE:'已完成',FAILED:'失敗'}[s.status]||s.status)+'</div>':'')+'</div>';
   h+='<div class="field"><label class="chk"><input type="checkbox" id="rs-news"'+(s.news?' checked':'')+'>納入個股新聞</label><label class="chk"><input type="checkbox" id="rs-cmp"'+(s.cmp?' checked':'')+'>與上一期比較</label></div>';
   h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">重點大項（選填，報告會優先解讀）</span><div class="srcgrid">'+MAJ.map(function(l,k){return '<label class="chk"><input type="checkbox" data-focus="'+esc(MJ[k].id)+'"'+(s.focus.indexOf(MJ[k].id)>=0?' checked':'')+'>'+esc(l)+'</label>';}).join('')+'</div></div>';
@@ -1137,7 +1138,7 @@ function stRender(){
     ['近 20 日行情與月營收',hi.enabled?'啟用｜最後更新 '+dtTxt(hi.last_success_at):'未啟用'],
     ['全市場估價',va.enabled?'啟用｜估價基準日 '+(VAL.on?v(VAL.date||va.valuation_date):'載入中…'):'未啟用（尚無正式估價快照）'],
     ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google／Bing 新聞（每 30 分鐘更新）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
-    ['報告',PAGES?'依請求產生（登入帳號後可送出，最多 20 筆；不支援上傳參考資料）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
+    ['報告',PAGES?'規則式報告（非 AI），依請求產生（登入帳號後可送出，最多 20 筆；可上傳參考檔：PDF、TXT、MD、CSV、XLSX、PNG、JPEG，單檔 20 MiB；V1 只列參考檔索引）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
     PAGES&&!bk.enabled?null:['備份',!bk.enabled?'未設定':(bk.status==='PASS'?'正常｜最後完成 '+v(bk.completed_at):'🔴 異常｜'+v(bk.error_code))], /* Pages 沒有備份功能：不列 */
     ['資料儲存',PAGES?(window.KupeiAuth&&window.KupeiAuth.session()?'這台瀏覽器；已登入 '+window.KupeiAuth.session().username+'，自選、設定與個股問題依帳號雲端同步':'這台瀏覽器（未登入；登入後自選、設定與個股問題可跨裝置同步）'):(SRV.mode==='server'?'主機（跨裝置同步）':'這台瀏覽器（主機寫入服務未啟用）')]
   ];
@@ -1256,6 +1257,13 @@ NEWS_OFF=PAGES?OFFZH:(SRV.mode!=='server'?'新聞需連上主機才能顯示（�
 var LIMIT_ZH={RSS_METADATA_ONLY:'僅 RSS 標題與摘要',BODY_UNAVAILABLE:'未取得新聞全文',SOURCE_DISABLED_BY_USER:'來源已停用',TITLE_ONLY:'僅標題與連結',STALE:'暫時無法更新，顯示上次擷取結果'};
 var REQ_ZH={SUBMITTED:'已送出（等待人工／AI 初稿）',DRAFTING:'初稿中',REVIEWING:'審核中',RECHECKING:'覆核中',PUBLISHED:'已發布',FAILED:'失敗',CANCELLED:'已取消',QUEUED:'排隊中',RUNNING:'產生中',DONE:'已完成'};
 var REQ_ACTIVE=['SUBMITTED','DRAFTING','REVIEWING','RECHECKING','QUEUED','RUNNING'];
+/* C-07：規則式報告管線（REPORT_RULE_V1）寫回請求的 message 是代碼；契約欄位缺少時管線會直接標失敗、不發布報告，這不是使用者的操作錯誤 */
+function reqMsg(m){
+  m=String(m==null?'':m);
+  if(m==='REPORT_CONTRACT_INCOMPLETE'||m==='REPORT_SETTINGS_OR_MANIFEST_MISSING')return '報告管線的設定與資料契約尚未完成，暫時無法產生（不是你的操作錯誤，也沒有發布任何報告）';
+  if(/^REPORT_RULE_V\d+/.test(m))return '規則式管線';
+  return m.length>80?m.slice(0,80)+'…':m;
+}
 var IN_ALLOW=['.pdf','.md','.txt','.docx','.xlsx','.png','.jpg','.jpeg'],IN_MAX=20*1024*1024;
 var NC={},RC={},PC={},IC={},NSRC={r:null,loading:false};
 function ymdOff(i){var n=new Date();return ymd(new Date(n.getFullYear(),n.getMonth(),n.getDate()-(i||0)));}
@@ -1374,7 +1382,7 @@ function repErr(r){
 function repLoad(id,force,then){if(force)delete RC[id];return cached(RC,id,'/reports/'+encodeURIComponent(id),then);}
 function inLoad(id,force,then){if(force)delete IC[id];return cached(IC,id,'/reports/'+encodeURIComponent(id)+'/inputs',then);}
 function pubLoad(id,p,rev,then){return cached(PC,id+'|'+p+'|'+rev,'/reports/'+encodeURIComponent(id)+'/'+encodeURIComponent(p)+'/'+encodeURIComponent(rev),then);}
-function reqLine(q){if(!q)return '';return '目前工作：'+esc(REQ_ZH[q.status]||q.status)+'｜期別 '+esc(q.period)+'｜送出 '+esc(tpTime(q.created_at))+(q.status==='SUBMITTED'?'｜AI 初稿尚未接入，由人工交接處理':'')+(q.message?'｜'+esc(q.message):'');}
+function reqLine(q){if(!q)return '';return '目前工作：'+esc(REQ_ZH[q.status]||q.status)+'｜期別 '+esc(q.period)+'｜送出 '+esc(tpTime(q.created_at))+(q.status==='SUBMITTED'?'｜AI 初稿尚未接入，由人工交接處理':'')+(q.message?'｜'+esc(reqMsg(q.message)):'');}
 var REP_ST={DRAFT:'（草稿）',FAILED:'（失敗）'};
 function repLabel(p){return esc(p.period)+' '+esc(p.revision)+(REP_ST[p.status]||'');}
 function fmtSize(n){return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';}
@@ -1431,7 +1439,8 @@ rRender=function(id){
     /* Pages：summary 一律當純文字（跳脫後只把換行轉 <br>，不解析 markdown）；連結只放 https */
     $('r-sub').textContent=p+'｜'+rev+(REP_ST[d.status]||'')+'｜產生 '+tpTime(pt.published_at)+'｜'+(d.title||'—');
     var fl=(d.files||[]).map(function(f){return '<li>'+(safeUrl(f.url)!=='#'?'<a href="'+esc(safeUrl(f.url))+'" target="_blank" rel="noopener noreferrer">'+esc(f.name)+'</a>':esc(f.name))+'</li>';}).join('');
-    $('r-body').innerHTML='<div style="border:1px solid var(--line);border-radius:6px;padding:8px"><b>摘要</b><p class="rep-text">'+(d.summary?esc(d.summary).replace(/\r?\n/g,'<br>'):'—')+'</p></div>'+
+    var ruleRep=/規則式/.test(d.title||'')||/REPORT_RULE_V\d/.test(d.summary||'');
+    $('r-body').innerHTML=(ruleRep?'<div class="sub" style="margin-bottom:6px">這份報告由規則式管線依正式發布資料整理，<b>不是 AI 撰寫</b>，也不構成買賣建議；參考檔只列檔名與雜湊、內容未解析；若要求前期比較但資料缺少，報告會寫明、不自行推算。</div>':'')+'<div style="border:1px solid var(--line);border-radius:6px;padding:8px"><b>摘要</b><p class="rep-text">'+(d.summary?esc(d.summary).replace(/\r?\n/g,'<br>'):'—')+'</p></div>'+
       (safeUrl(d.url)!=='#'?'<p><a href="'+esc(safeUrl(d.url))+'" target="_blank" rel="noopener noreferrer">開啟完整報告</a></p>':'')+
       (fl?'<h2 id="rh-files">檔案</h2><ul>'+fl+'</ul>':'');
     $('r-toc').innerHTML=fl?'<a href="#" data-rtoc="rh-files">檔案</a>':'<span class="placeholder">無章節</span>';
@@ -1471,14 +1480,81 @@ rsRender=function(){
   else{var ps=(c.r.data&&c.r.data.periods)||[];hh=ps.length?ps.map(function(p){return '<div style="display:flex;gap:8px"><a href="#/report/'+esc(id)+'/'+esc(p.period)+'/'+esc(p.revision)+'">'+esc(p.period)+' '+esc(p.revision)+'</a><span class="sub">發布 '+esc(tpTime(p.published_at))+'</span></div>';}).join(''):'<div class="placeholder">尚無已發布報告。</div>';}
   $('rs-history').innerHTML=hh;
 };
-/* Pages 報告設定：產生請求（只限登入帳號）、歷次報告、自己的請求；不支援上傳參考資料 */
+/* Pages 報告參考檔（C-05）：只限登入；只看得到、下載、刪除自己上傳的。檔案存在後端私人儲存，頁面不顯示上傳者或永久網址。
+   清單狀態 PIN[代號]={loading,list,err,busy}；換帳號（或登出）整份清掉，避免看到上一位的清單。 */
+var PIN={},PIN_WHO=null,PIN_EXT=['.pdf','.txt','.md','.csv','.xlsx','.png','.jpg','.jpeg'],PIN_MAX=20*1024*1024;
+function pinErr(r){
+  var c=r&&r.data&&r.data.error_code;
+  if(!r||!r.status)return '連線中斷，請稍後再試。';
+  if(r.status===401)return '登入已過期，請重新登入。';
+  if(r.status===429)return '請求太頻繁，請稍後再試。';
+  var m={UNSUPPORTED_TYPE:'不支援的檔案類型或內容（只接受 PDF、TXT、MD、CSV、XLSX、PNG、JPEG；文字檔須為 UTF-8）。',TOO_LARGE:'檔案超過單檔 20 MiB 上限。',QUOTA_EXCEEDED:'參考檔已達上限（每人最多 50 個或 200 MiB），請先刪除不需要的檔案。',CHECKSUM_MISMATCH:'檔案傳輸時損毀，請重新上傳。',INPUT_LOCKED:'這個檔案已被報告引用，不能刪除。'}[c];
+  if(m)return m;
+  return r.status===404?'找不到這個檔案（可能已被刪除）。':'操作失敗（'+r.status+'）。';
+}
+function pinLoad(id,force,re){
+  var s=PIN[id];
+  if(!s||force){
+    s=PIN[id]={loading:true,list:null,err:null,busy:false};
+    var me=s;
+    window.KupeiInputs.list(id).then(function(r){if(PIN[id]!==me)return;me.loading=false;if(r.ok)me.list=r.data||[];else me.err=r;re();},function(){if(PIN[id]!==me)return;me.loading=false;me.err={status:0};re();});
+  }
+  return s;
+}
+function pinRefresh(id){pinLoad(id,true,function(){if(curPage==='report-settings'&&RP.id===id)rsRender();});}
+function pinRender(id,re,login){
+  var A=window.KupeiAuth,who=login&&A.session&&A.session()?A.session().username:'';
+  if(PIN_WHO!==who){PIN={};PIN_WHO=who;}
+  $('rs-infield').hidden=false;
+  var box=$('rs-inputs');
+  if(!login||!window.KupeiInputs){box.innerHTML='<div class="placeholder">參考檔需要登入帳號（左側「帳號」）；只有你自己看得到、下載與刪除自己上傳的檔案。</div>';return;}
+  var s=pinLoad(id,false,re),h;
+  if(s.loading)h='<div class="placeholder">參考檔載入中…</div>';
+  else if(s.err)h='<div class="placeholder">'+esc(pinErr(s.err))+' <button class="btn sm" data-pin-retry="1">重試</button></div>';
+  else h=s.list.length?s.list.map(function(f){
+    return '<div class="pin-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:4px 0"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</span>'+(f.locked?'<span class="badge b-fin" title="已被報告引用，不能刪除">已鎖定</span>':'')+'<span class="grow"></span><span class="sub" title="SHA-256 '+esc(f.sha256)+'">'+fmtSize(f.bytes)+'｜SHA-256 '+esc(String(f.sha256).slice(0,12))+'…｜'+esc(tpTime(f.createdAt))+'</span><button class="btn sm" data-pin-dl="'+esc(f.id)+'" aria-label="下載 '+esc(f.name)+'">下載</button><button class="btn sm" data-pin-rm="'+esc(f.id)+'"'+(f.locked?' disabled title="已被報告引用，不能刪除"':'')+' aria-label="刪除 '+esc(f.name)+'">刪除</button></div>';
+  }).join(''):'<div class="placeholder">尚無參考檔。</div>';
+  h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><label class="sr" for="rs-file">選擇參考檔</label><input type="file" id="rs-file" accept="'+PIN_EXT.join(',')+'"'+(s.busy?' disabled':'')+'><button class="btn sm" data-pin-add="'+esc(id)+'"'+(s.busy?' disabled':'')+'>'+(s.busy?'上傳中…':'加入檔案')+'</button><span class="sub">單檔 20 MiB 以內；PDF、TXT、MD、CSV、XLSX、PNG、JPEG；每人最多 50 個或 200 MiB。報告 V1 只列出檔名與雜湊，不會讀取檔案內容。</span></div>';
+  box.innerHTML=h;
+}
+function pinUpload(id,file){
+  if(!file){toast('請先選擇檔案');return;}
+  var ext=((file.name||'').match(/\.[^.]+$/)||[''])[0].toLowerCase();
+  if(PIN_EXT.indexOf(ext)<0){toast('不支援的檔案類型'+(ext?'：'+ext:''));return;}
+  if(file.size>PIN_MAX){toast('檔案超過單檔 20 MiB 上限');return;}
+  var s=PIN[id];if(!s||s.busy)return;s.busy=true;rsRender();
+  window.KupeiInputs.upload(id,file).then(function(r){
+    s.busy=false;
+    if(r.ok)toast('已加入 '+((r.data&&r.data.name)||file.name));
+    else{toast('上傳失敗：'+pinErr(r));if(r.status===401&&window.KupeiAuth&&window.KupeiAuth.openLogin)window.KupeiAuth.openLogin();}
+    pinRefresh(id);
+  },function(){s.busy=false;toast('上傳結果不明（連線中斷），已重新查詢');pinRefresh(id);});
+}
+function pinDownload(id,fid){
+  var f=((PIN[id]&&PIN[id].list)||[]).filter(function(x){return x.id===fid;})[0];if(!f)return;
+  window.KupeiInputs.download(id,fid).then(function(r){
+    if(!r.ok){toast('下載失敗：'+pinErr(r));if(r.status===404)pinRefresh(id);return;}
+    var url=URL.createObjectURL(r.data),a=document.createElement('a');a.href=url;a.download=f.name;a.rel='noopener';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},2000);
+  },function(){toast('下載失敗：連線中斷');});
+}
+function pinRemove(id,fid){
+  var f=((PIN[id]&&PIN[id].list)||[]).filter(function(x){return x.id===fid;})[0];if(!f)return;
+  if(f.locked){toast('這個檔案已被報告引用，不能刪除');return;}
+  if(!window.confirm('刪除參考檔「'+f.name+'」？檔案會立即從儲存空間刪除，無法復原。'))return;
+  window.KupeiInputs.remove(id,fid).then(function(r){
+    if(r.ok)toast('已刪除 '+f.name);else toast('刪除失敗：'+pinErr(r));
+    pinRefresh(id);
+  },function(){toast('刪除結果不明（連線中斷），已重新查詢');pinRefresh(id);});
+}
+/* Pages 報告設定：產生請求（只限登入帳號）、歷次報告、自己的請求、參考檔（只限登入） */
 function rsRenderPages(id,re){
   var c=repLoad(id,false,re),A=window.KupeiAuth,login=!!(A&&A.loggedIn&&A.loggedIn());
   if(c.lg==null)c.lg=login;else if(c.lg!==login){c=repLoad(id,true,re);c.lg=login;} /* 登入狀態變了：重讀（自己的請求只有登入後讀得到） */
   var d=c.r&&c.r.ok&&c.r.data?c.r.data:null,q=d?d.current_request:null,busy=!!(q&&REQ_ACTIVE.indexOf(q.status)>=0);
   $('rs-genbox').innerHTML='<button class="btn primary" data-repgen="'+esc(id)+'"'+(busy||c.loading?' disabled':'')+' title="'+(busy?'此公司已有排隊中的報告請求':'以目前正式分析期別 '+esc(BYID[id].period||'')+' 送出產生請求')+'">'+(busy?'請求排隊中':login?'產生報告':'產生報告（需登入）')+'</button>';
   $('rs-reqstate').innerHTML=busy?reqLine(q):(c.r&&!c.r.ok?esc(repErr(c.r)):(login?'':'送出產生請求需要登入帳號（左側「帳號」）。'));
-  $('rs-infield').hidden=true; /* Pages 不支援上傳參考資料：整欄不顯示 */
+  pinRender(id,re,login);
   var hh;
   if(c.loading)hh='<div class="placeholder">載入中…</div>';
   else if(!c.r.ok)hh='<div class="placeholder">'+esc(repErr(c.r))+'</div>';
@@ -1486,7 +1562,7 @@ function rsRenderPages(id,re){
     hh=ps.length?ps.map(function(p){return '<div style="display:flex;gap:8px"><a href="#/report/'+esc(id)+'/'+esc(p.period)+'/'+esc(p.revision)+'">'+repLabel(p)+'</a><span class="sub">產生 '+esc(tpTime(p.published_at))+(p.title?'｜'+esc(p.title):'')+'</span></div>';}).join(''):'<div class="placeholder">尚無報告。</div>';
     if(fs.length)hh+='<div class="sub">另有 '+fs.length+' 份產生失敗：'+fs.map(function(p){return repLabel(p);}).join('、')+'</div>';
     var rq=d.requests;
-    hh+='<div class="sub" style="margin-top:6px">我的請求</div>'+(rq==null?'<div class="placeholder">'+(login?'請求紀錄暫時無法讀取。':'登入帳號後顯示自己的請求。')+'</div>':rq.length?rq.slice(0,20).map(function(r){return '<div class="sub" style="padding:2px 0">'+esc(r.period)+'｜'+esc(REQ_ZH[r.status]||r.status)+'｜送出 '+esc(tpTime(r.created_at))+(r.updated_at?'｜更新 '+esc(tpTime(r.updated_at)):'')+(r.message?'｜'+esc(r.message):'')+'</div>';}).join(''):'<div class="placeholder">尚無請求。</div>');}
+    hh+='<div class="sub" style="margin-top:6px">我的請求</div>'+(rq==null?'<div class="placeholder">'+(login?'請求紀錄暫時無法讀取。':'登入帳號後顯示自己的請求。')+'</div>':rq.length?rq.slice(0,20).map(function(r){return '<div class="sub" style="padding:2px 0">'+esc(r.period)+'｜'+esc(REQ_ZH[r.status]||r.status)+'｜送出 '+esc(tpTime(r.created_at))+(r.updated_at?'｜更新 '+esc(tpTime(r.updated_at)):'')+(r.message?'｜'+esc(reqMsg(r.message)):'')+'</div>';}).join(''):'<div class="placeholder">尚無請求。</div>');}
   $('rs-history').innerHTML=hh;
 }
 function repGenPages(id,btn){
@@ -1516,7 +1592,14 @@ function upload(id,file){
     },function(){toast('上傳結果不明（連線中斷），已重新查詢');inRefresh(id);});
 }
 document.addEventListener('click',function(e){
-  var t=e.target.closest('[data-repgen],[data-inrm],[data-inadd]');if(!t)return;var d=t.dataset;
+  var t=e.target.closest('[data-repgen],[data-inrm],[data-inadd],[data-pin-add],[data-pin-dl],[data-pin-rm],[data-pin-retry]');if(!t)return;var d=t.dataset;
+  if(PAGES){
+    var pid=RP.id;if(!pid)return;
+    if(d.pinAdd!==undefined){var pf=$('rs-file');pinUpload(d.pinAdd,pf&&pf.files[0]);return;}
+    if(d.pinDl!==undefined){pinDownload(pid,d.pinDl);return;}
+    if(d.pinRm!==undefined){pinRemove(pid,d.pinRm);return;}
+    if(d.pinRetry!==undefined){pinRefresh(pid);return;}
+  }
   if(d.repgen){
     var id=d.repgen;t.disabled=true;
     if(PAGES){repGenPages(id,t);return;}

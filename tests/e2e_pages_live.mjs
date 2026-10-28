@@ -229,10 +229,10 @@ await check('報告單篇：summary 以純文字呈現（不解析 markdown、�
   await noInject(P)
   await shot(P, 'report_page')
 })
-await check('報告設定：歷次報告與自己的請求（已登入），不顯示上傳參考資料', async () => {
+await check('報告設定：歷次報告與自己的請求（已登入）；參考檔區塊已開放（細節見 e2e_pages_inputs.mjs），不顯示內部路徑', async () => {
   await go(P, '#/report-settings', 2000)
   const hist = await P.innerText('#rs-history'); must(/2026Q2 1/.test(hist) && /失敗/.test(hist) && !/登入帳號後顯示/.test(hist), '歷次報告：' + hist.slice(0, 160))
-  must(!(await P.isVisible('#rs-infield')) && !/inputs\//.test(await P.innerText('#rs-panel')), 'Pages 不支援上傳參考資料：整欄應隱藏、不顯示內部路徑')
+  must(await P.isVisible('#rs-infield') && !/inputs\//.test(await P.innerText('#rs-panel')), '參考檔區塊應顯示（登入後）、不顯示內部路徑')
   must(/產生報告/.test(await P.innerText('[data-repgen]')) && !/需登入/.test(await P.innerText('[data-repgen]')), '按鈕：' + await P.innerText('[data-repgen]'))
 })
 await check('報告設定：送出 202、重複回同一筆、超過上限提示 QUOTA_EXCEEDED', async () => {
