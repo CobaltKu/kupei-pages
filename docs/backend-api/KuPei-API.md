@@ -46,7 +46,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
    - 403 `FORBIDDEN`：這個權杖不能用這個路徑（唯讀權杖打 `/api/store`、任何權杖打站長的 `/api/watchlist` 等），不要想辦法繞過。403 `QUOTA_EXCEEDED`：雲端文件額度滿了，提示使用者，不要自動重試。
    - 瀏覽器出現 CORS 錯誤：本機要是 `http://localhost:<埠>` 或 `http://127.0.0.1:<埠>`；GitHub Pages 要先把 `https://<帳號>.github.io` 給維護者加白名單。不要改用 `no-cors` 之類的方式硬解。
 7. **正式部署只到雙方約定的 GitHub Pages**（流程見《KuPei-前端部署指南-GitHub-Pages.md》），權杖用 GitHub Actions secret `VITE_KUPEI_TOKEN` 在建置時注入；不要把權杖貼進 issue、commit 訊息或對話。
-8. 目前沒有即時串流：盤中價只有定時快照（`/api/market/intraday`，`stale` 為 `true` 時不要當成即時價），新聞與報告見第 12 條；不要為沒有的資料做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
+8. 目前沒有即時串流：盤中價有兩種定時快照——**登入後**優先用 FinMind 每 30 秒的 `kupei.marketLive()`（`/api/market/live`，2026-10-28 起；頁面要標「資料來源：FinMind」；只在畫面看得到、`phase` 為 `OPEN` 時每 30 秒以上輪詢一次），它丟 503 `LIVE_UNAVAILABLE` 或 `stale` 為 `true` 時改用證交所 MIS 每 10 分鐘的 `kupei.marketIntraday()`（`/api/market/intraday`，`stale` 為 `true` 時不要當成即時價）。**FinMind 即時資料不得對外公開或轉散布**：不要存進雲端文件、不要放進公開頁面或建置、不要匯出成檔案。新聞與報告見第 12 條；不要為沒有的資料做空欄位或假資料。**估價**（`valuation.json`）、**說明頁**（`help.json`）、**節點完整定義**（`node_info.json`）是批次的可選檔：只在 `kupei.loadValuation()`／`loadHelp()`／`loadNodeInfo()` 回傳不是 `null` 時顯示，`null` 就是這個批次沒有，不要補空欄位或假資料，也不要自己去猜網址請求。
 9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.login()`（2026-10-28 起註冊預設關閉：`kupei.auth.config()` 的 `registrationOpen` 為 `true` 時才顯示註冊入口、呼叫 `kupei.auth.register()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。~~沒登入時 App 退回本機模式、評分與行情不需要登入~~（2026-10-28 起改成：沒登入就只顯示登入畫面，見第 0 條）。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
@@ -105,13 +105,13 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 
 ### 行情 `/api/market/*`
 
-`latest`／`history` 是**每日收盤**（非即時）。**日收盤、月營收、交易日曆資料來源：FinMind**（僅在授權範圍內顯示；FinMind 條款要求標示來源，頁面請標「資料來源：FinMind」）；證交所、櫃買中心與公開資訊觀測站只當備援。盤中快照另見 `/api/market/intraday`（不來自 FinMind）。
+`latest`／`history` 是**每日收盤**（非即時）。**日收盤、月營收、交易日曆資料來源：FinMind**（僅在授權範圍內顯示；FinMind 條款要求標示來源，頁面請標「資料來源：FinMind」）；證交所、櫃買中心與公開資訊觀測站只當備援。盤中快照另見 `/api/market/intraday`（證交所 MIS，不來自 FinMind）與 `/api/market/live`（FinMind 每 30 秒，只限登入，2026-10-28）。
 
 | 路徑 | 說明 |
 | --- | --- |
 | `GET /api/market/latest` | `{ dates: { L, O }, quotes: { "<代號>": [收盤, 漲跌價差, 成交股數] } }`。`L` 上市、`O` 上櫃，各市場最新交易日。`收盤` 為 `null` ＝當日無成交。選填 `source: { L, O }`（K-30，相容新增）：各市場最新交易日的資料來源，`"finmind"` 或 `"exchange"`（證交所／櫃買，含舊資料）；欄位可能不存在，前端要容忍 |
 | `GET /api/market/history?codes=2330,2454` | `{ quotes: { "<代號>": [[日期, 收盤, 成交股數], …] }, revenue: { "<代號>": [[年月, 營收(千元), 年增率%], …] } }`。近 20 個交易日、近 5 個月，舊→新。`codes` 要 1～30 個 4 碼代號，任何一個不合法就整個 400（不會默默丟掉壞的） |
-| `GET /api/market/status` | `{ counts: { quoteDays, firstDay, lastDay, revenueMonths, firstMonth, lastMonth }, runs: [最近 12 次抓取], source? }`，看資料新不新用。`runs[].message` 看得出來源：`finmind`、`calendar`（FinMind 日曆確定休市）、`證交所（finmind：原因）`＝FinMind 失敗退回交易所；`source` 同 `latest` |
+| `GET /api/market/status` | `{ counts: { quoteDays, firstDay, lastDay, revenueMonths, firstMonth, lastMonth }, runs: [最近 12 次抓取], source?, live? }`，看資料新不新用。`live`（K-54，相容新增）：FinMind 盤中 30 秒的監控（`enabled`、`lastSuccessAt`、`consecutiveFailures`、`todayOk`、`todayFail`、`lastError`、`lastDurationMs`、`nextAlarmAt` 等，不含資料），停用時是 `{ enabled: false }`。`runs[].message` 看得出來源：`finmind`、`calendar`（FinMind 日曆確定休市）、`證交所（finmind：原因）`＝FinMind 失敗退回交易所；`source` 同 `latest` |
 
 - 漲跌幅 ＝ `漲跌價差 ÷ (收盤 − 漲跌價差)`。
 - 只有 4 碼代號；評分名單 1,976 家中有 10 家找不到行情（1516、2067、3625、3632、4155、4804、6142、6167、6173、8047）。
@@ -133,6 +133,22 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 - 沒有快照時回 `quotes: {}`、`stale: true`。只有 4 碼代號。
 - `ttlSeconds`（目前 300）是推送間隔；伺服器快取 60 秒、`Cache-Control: private, max-age=60`。GitHub 排程常會晚幾分鐘，資料時間可能比現在早 5～15 分鐘。
 - 計入 `/api/*` 的每分鐘 30 次。
+
+### FinMind 盤中即時 `/api/market/live`（2026-10-28 新增，K-54）
+
+後端盤中（台灣交易日 09:00～13:35）**每 30 秒**抓一次 FinMind 全市場即時快照，這裡讀最新那一份。**只限登入帳號**（FinMind 條款：即時資料不得對外公開、不得原樣轉散布）；頁面要標「**資料來源：FinMind**」。`starter` 的 `kupei.marketLive()` 已包好（沒登入丟 401、不打網路）。
+
+| 路徑 | 說明 |
+| --- | --- |
+| `GET /api/market/live` | `{ source: "finmind", phase, at, fetchedAt, stale, intervalSeconds: 30, quotes: { "<代號>": [成交價, 漲跌, 累計成交量, "HH:MM:SS"] } }`。**只有登入權杖（`kps_`）**可讀；唯讀、寫入權杖 403 `FORBIDDEN`，沒權杖 401 |
+| `POST /api/market/live/kick` | **推送權杖專用，前端不會用到**（維運手動啟動抓取） |
+
+- `phase`：同 `/api/market/intraday`（平日 09:00 前 `PRE`、09:00～13:30 `OPEN`、其餘 `CLOSED`）；後端的交易日曆確定今天休市時一律 `CLOSED`。
+- `at`：資料時間（各檔最新的那一筆），ISO 8601 台灣時間 `+08:00`；`fetchedAt`：後端抓到的時間（UTC）。
+- `stale`：`true` ＝ `OPEN` 時超過 120 秒沒抓到新的，或資料日期不是今天（開盤前、休市日）。**`stale` 為 `true` 時改用 `/api/market/intraday` 或標示資料時間**。
+- 報價：成交價 `null` ＝今天還沒有成交（漲跌也是 `null`）；漲跌 ＝ FinMind 的 `change_price`；累計成交量是 FinMind 的 `total_volume`（**單位照 FinMind**，與 `latest`、`intraday` 的「股」可能不同，顯示前先確認）；時間是台灣時間。只有 4 碼代號。漲跌幅 ＝ `漲跌 ÷ (成交價 − 漲跌)`。
+- **503 `LIVE_UNAVAILABLE`**：後端沒啟用、還沒抓到過、或暫時讀不到 → 改用 `kupei.marketIntraday()`。不要立刻重試，下一個輪詢間隔再問。
+- 快取：`Cache-Control: private, no-store`（每次都問伺服器）。計入 `/api/*` 的每分鐘 30 次：輪詢間隔不要短於 `intervalSeconds`，分頁在背景、`phase` 不是 `OPEN` 時停止輪詢。
 
 ### 帳號 `/api/auth/*`（不需要權杖）
 
@@ -268,7 +284,7 @@ await kupei.auth.logout()
 | 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
-| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀權杖打 `/api/store`、唯讀或寫入權杖打報告參考檔 `/api/reports/<code>/inputs*`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
+| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀或寫入權杖打 `/api/market/live`、唯讀權杖打 `/api/store`、唯讀或寫入權杖打報告參考檔 `/api/reports/<code>/inputs*`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
 | 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }`。**報告參考檔超過 50 個或 200 MiB 時是 413**（不是 403），`details` 是 `{ files, bytes, maxFiles, maxBytes }` |
 | 409 | `INPUT_LOCKED` | 報告參考檔已被報告引用，不能刪除 |
@@ -278,6 +294,7 @@ await kupei.auth.logout()
 | 409 | `INVALID_TRANSITION` | 報告請求的狀態不能這樣改（推送權杖的 `PATCH /api/reports/requests/<id>`）；`error.details` 是 `{ from, to }` |
 | 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過上限：雲端文件 300 KB、帳號端點（`/api/auth/*`）4 KB、報告請求 4 KB、報告參考檔單檔 20 MiB |
 | 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 與 `/api/reports/<code>/inputs*` 各 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 30 次）；`/api/news` 沒命中快取的新查詢 6 次。IPv6 以 /64 為一組，超過一律帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
+| 503 | `LIVE_UNAVAILABLE` | FinMind 盤中即時（`/api/market/live`）沒啟用、還沒抓到過或暫時讀不到；改用 `/api/market/intraday`（2026-10-28，K-54） |
 | 502 | `UPSTREAM_ERROR` | `/api/news` 的新聞來源暫時抓不到、伺服器也沒有舊結果；稍後再試（不要立刻重送） |
 | 404 | `NOT_FOUND` | 刪除不存在的文件、沒有這份報告（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 

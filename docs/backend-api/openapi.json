@@ -58,7 +58,8 @@
                   "REGISTRATION_CLOSED",
                   "INVITE_REQUIRED",
                   "INVITE_INVALID",
-                  "INVALID_TRANSITION"
+                  "INVALID_TRANSITION",
+                  "LIVE_UNAVAILABLE"
                 ]
               },
               "message": {
@@ -500,6 +501,9 @@
                 ]
               }
             }
+          },
+          "live": {
+            "$ref": "#/components/schemas/LiveStatus"
           }
         }
       },
@@ -1167,6 +1171,132 @@
                 }
               }
             }
+          }
+        }
+      },
+      "LiveQuotes": {
+        "type": "object",
+        "description": "FinMind 全市場即時快照（K-54，2026-10-28）。後端盤中每 30 秒抓一次；只限登入帳號（FinMind 條款：即時資料不得對外公開）。頁面要標「資料來源：FinMind」。",
+        "required": [
+          "source",
+          "phase",
+          "at",
+          "fetchedAt",
+          "stale",
+          "intervalSeconds",
+          "quotes"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "finmind"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "PRE",
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "台灣時間平日 09:00 前 PRE、09:00～13:30 OPEN、其餘 CLOSED；交易日曆確定今天休市時 CLOSED"
+          },
+          "at": {
+            "type": "string",
+            "description": "資料時間（各檔最新的那一筆），ISO 8601 台灣時區，例如 2026-10-28T10:25:03+08:00"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "後端抓到這份的時間（UTC）"
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "true＝OPEN 時 fetchedAt 超過 120 秒，或 at 的日期不是今天（台灣）→ 改用 /api/market/intraday 或標示資料時間"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "description": "後端抓取間隔，目前 30；前端輪詢不要比這個快"
+          },
+          "quotes": {
+            "type": "object",
+            "description": "4 碼代號 → [成交價|null, 漲跌|null, 累計成交量|null（單位照 FinMind）, \"HH:MM:SS\"（台灣時間）]；成交價 null＝今天還沒成交",
+            "additionalProperties": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "LiveStatus": {
+        "type": "object",
+        "description": "FinMind 盤中 30 秒的監控（K-54，不含資料）。enabled 為 false 時只有這個欄位",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastAttemptAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "consecutiveFailures": {
+            "type": "integer"
+          },
+          "day": {
+            "type": "string",
+            "nullable": true,
+            "description": "todayOk／todayFail 是哪一天（台灣日期）"
+          },
+          "todayOk": {
+            "type": "integer"
+          },
+          "todayFail": {
+            "type": "integer"
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastErrorAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastDurationMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "最近一次處理耗時（牆上時間，含等 FinMind；不是 CPU time）"
+          },
+          "lastCount": {
+            "type": "integer",
+            "nullable": true
+          },
+          "nextAlarmAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "snapshotAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "snapshotCount": {
+            "type": "integer",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "description": "DO 讀不到時才有"
           }
         }
       }
@@ -1844,6 +1974,92 @@
           },
           "422": {
             "description": "PARSE_ERROR：at 格式或時間不對、列的形狀／代號不對、代號重複、空的或超過 3,000 列",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/market/live": {
+      "get": {
+        "summary": "FinMind 盤中即時快照（每 30 秒，只限登入）",
+        "description": "後端用 Durable Object 盤中（台灣交易日 09:00～13:35）每 30 秒抓一次 FinMind 全市場即時快照。**只限登入權杖（kps_）**與站長 cookie；唯讀、寫入、推送權杖 403。計入 /api/* 每分鐘 30 次。503 LIVE_UNAVAILABLE（後端沒啟用、還沒抓到、暫時讀不到）或 stale 為 true 時，前端改用 /api/market/intraday（證交所 MIS）。頁面要標「資料來源：FinMind」。",
+        "responses": {
+          "200": {
+            "description": "OK（Cache-Control: private, no-store）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveQuotes"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "description": "LIVE_UNAVAILABLE：沒啟用、還沒抓到或暫時讀不到 → 改用 /api/market/intraday",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/market/live/kick": {
+      "post": {
+        "summary": "立刻抓一次 FinMind 即時快照（推送權杖專用，前端不會用到）",
+        "description": "Authorization: Bearer <INGEST_TOKEN>。維運手動啟動：不看時段抓一次，之後照排程（時段外排到下一個平日 09:00）。其他權杖 401；沒啟用 503 LIVE_UNAVAILABLE。",
+        "responses": {
+          "200": {
+            "description": "result：ok／error／busy（上一輪還在跑）；ok 時帶 count、at，error 時帶 message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string"
+                    },
+                    "nextAlarmAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "at": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "description": "LIVE_UNAVAILABLE（沒有設定 FINMIND_TOKEN）",
             "content": {
               "application/json": {
                 "schema": {

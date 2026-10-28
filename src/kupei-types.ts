@@ -204,6 +204,29 @@ export interface IntradayResponse {
   quotes: Record<string, IntradayQuote>
 }
 
+// ── FinMind 盤中 30 秒（K-54，2026-10-28）──
+/** 即時報價：[成交價(null＝今天還沒有成交), 漲跌, 累計成交量（單位照 FinMind）, 資料時間 "HH:MM:SS"（台灣時間）] */
+export type LiveQuote = [number | null, number | null, number | null, string]
+
+/**
+ * GET /api/market/live：後端盤中每 30 秒抓一次 FinMind 全市場即時快照。**只限登入帳號**（FinMind 條款：即時資料不得對外公開）；
+ * 頁面要標「資料來源：FinMind」。抓不到（503 LIVE_UNAVAILABLE）或 stale 為 true 時改用 marketIntraday()（證交所 MIS）。
+ */
+export interface LiveQuotes {
+  source: 'finmind'
+  /** 同 IntradayResponse.phase；交易日曆確定今天休市時是 CLOSED */
+  phase: 'PRE' | 'OPEN' | 'CLOSED'
+  /** 資料時間（各檔最新的那一筆），ISO 8601 台灣時間 +08:00 */
+  at: string
+  /** 後端抓到這份的時間（UTC ISO 8601） */
+  fetchedAt: string
+  /** true＝OPEN 時超過 120 秒沒更新，或資料日期不是今天 → 改用 marketIntraday() 或標示資料時間 */
+  stale: boolean
+  /** 後端抓取間隔（秒），目前 30；前端輪詢不要比這個快 */
+  intervalSeconds: number
+  quotes: Record<string, LiveQuote>
+}
+
 export interface Quote {
   close: number | null
   change: number | null
@@ -231,6 +254,30 @@ export interface MarketStatus {
   runs: { job: string; key: string; status: string; rows: number; message: string | null; at: string }[]
   /** 各市場最新交易日的收盤資料來源（選填，K-30），同 LatestResponse.source */
   source?: Partial<Record<Market, 'finmind' | 'exchange'>>
+  /** FinMind 盤中 30 秒的監控（K-54，選填；不含資料）。enabled 為 false 時其他欄位不存在 */
+  live?: LiveStatus
+}
+
+/** /api/market/status 的 live（K-54）：給維運看抓取是否正常 */
+export interface LiveStatus {
+  enabled: boolean
+  lastSuccessAt?: string | null
+  lastAttemptAt?: string | null
+  consecutiveFailures?: number
+  /** todayOk／todayFail 是哪一天（台灣日期） */
+  day?: string | null
+  todayOk?: number
+  todayFail?: number
+  lastError?: string | null
+  lastErrorAt?: string | null
+  /** 最近一次處理耗時（毫秒，牆上時間，含等 FinMind；不是 CPU time） */
+  lastDurationMs?: number | null
+  lastCount?: number | null
+  nextAlarmAt?: string | null
+  snapshotAt?: string | null
+  snapshotCount?: number | null
+  /** DO 讀不到時才有 */
+  error?: string
 }
 
 export interface ApiErrorBody {

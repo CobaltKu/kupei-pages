@@ -32,6 +32,7 @@
 //   const latest = await kupei.marketLatest()
 //   const q = quoteOf(latest, '2330')
 //   const intra = await kupei.marketIntraday()           // 盤中快照（每 10 分鐘更新）；intra.stale 為 true 時改顯示收盤價
+//   const live = await kupei.marketLive()                // FinMind 盤中 30 秒（只限登入；503／stale 時改用 marketIntraday）；標「資料來源：FinMind」
 //   const valuation = await kupei.loadValuation()         // 這個批次沒有估價就是 null → 不要顯示估價欄位
 //   const help = await kupei.loadHelp()                   // 說明頁；null ＝ 沒交付
 //   const nodeInfo = await kupei.loadNodeInfo()           // 節點完整定義；null ＝ 沒交付（英文名仍看 ds.nodeName）
@@ -61,6 +62,7 @@ import type {
   History,
   IntradayResponse,
   LatestResponse,
+  LiveQuotes,
   Major,
   Manifest,
   MarketStatus,
@@ -435,6 +437,7 @@ export function createKupeiClient(cfg: KupeiConfig) {
   let latestInFlight: Promise<LatestResponse> | null = null
   let intradayCache: { at: number; value: IntradayResponse } | null = null
   let intradayInFlight: Promise<IntradayResponse> | null = null
+  let liveInFlight: Promise<LiveQuotes> | null = null
 
   // ── history：同一個 tick 內的呼叫合併成一次請求（列表畫面一次要幾十家時特別有用） ──
   let pending: { codes: Set<string>; promise: Promise<void> } | null = null
@@ -593,6 +596,25 @@ export function createKupeiClient(cfg: KupeiConfig) {
         })
         .finally(() => (intradayInFlight = null))
       return intradayInFlight
+    },
+
+    // ── FinMind 盤中 30 秒（K-54）──
+    /**
+     * FinMind 全市場即時快照（後端盤中每 30 秒抓一次）。只限登入：沒登入丟 KupeiError 401 UNAUTHENTICATED、不打網路。
+     * 不快取（每次都問伺服器，回應 no-store）；同時呼叫共用進行中的請求。輪詢間隔不要短於 intervalSeconds，
+     * 而且只在畫面看得到、phase 為 OPEN 時輪詢（/api/* 每分鐘 30 次）。
+     * 503 LIVE_UNAVAILABLE（後端沒啟用、還沒抓到、暫時讀不到）照常丟 KupeiError → 改用 marketIntraday()；stale 為 true 也一樣。
+     * 頁面要標「資料來源：FinMind」（FinMind 條款）。
+     */
+    marketLive(): Promise<LiveQuotes> {
+      try {
+        requireSession()
+      } catch (e) {
+        return Promise.reject(e)
+      }
+      if (liveInFlight) return liveInFlight
+      liveInFlight = get<LiveQuotes>('/api/market/live', { cache: 'no-store' }).finally(() => (liveInFlight = null))
+      return liveInFlight
     },
 
     /** 行情資料範圍與最近抓取結果（資料新不新用） */

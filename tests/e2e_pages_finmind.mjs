@@ -1,6 +1,5 @@
 // FinMind 盤中價（登入後每 30 秒，/api/market/live）與退回證交所 MIS 快照。後端端點全部用假的回應，不打線上、不建立帳號。
-// starter 還沒有 marketLive：測試在 dev server 回傳的 /src/kupei-client.ts 補上一行（模擬 starter 同步後的樣子），
-// 所以要對 `npm run dev`（vite dev）跑，不能對建置後的 preview 跑。沒有補上的情境（starter 還沒同步）另外測。
+// 用 starter 的 kupei.marketLive()（2026-10-28 已同步），dev server 或建置後的 preview 都可以跑。
 // BASE=http://127.0.0.1:5401/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_finmind.mjs（SHOTS=<資料夾> 另存 kp-live-*.png）
 import { chromium } from 'playwright'
 import { routeBackend, seedSession, CORS } from './_kupei_test.mjs'
@@ -26,7 +25,7 @@ const M = { live: LIVE(), intraday: MIS, calls: [] }
 const liveCalls = () => M.calls.filter((c) => c === 'live').length
 const misCalls = () => M.calls.filter((c) => c === 'intraday').length
 
-async function open(hash = '', { inject = true, clock = true, vp = { width: 1280, height: 900 }, seed = {} } = {}) {
+async function open(hash = '', { clock = true, vp = { width: 1280, height: 900 }, seed = {} } = {}) {
   const ctx = await b.newContext({ viewport: vp })
   await routeBackend(ctx)
   await seedSession(ctx, 't-user', { kupei3_watch: JSON.stringify({ groups: [{ id: 1, name: '自選1', ids: ['2330', '2317'] }], cur: 1 }), ...seed })
@@ -45,21 +44,11 @@ async function open(hash = '', { inject = true, clock = true, vp = { width: 1280
     return route.fulfill({ status: 200, headers: { ...CORS, 'cache-control': 'private, no-store' }, body: JSON.stringify(x) })
   })
   await ctx.route(/\/api\/(news|reports)/, (route) => route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: CORS }) : route.fulfill({ status: 404, headers: CORS, body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'NOT_FOUND' } }) }))
-  // 模擬 starter 同步後的 kupei.marketLive()（同一個 get：帶登入權杖、401 清 session、429 依 Retry-After 重試一次）
-  let injected = false
-  if (inject) await ctx.route(/\/src\/kupei-client\.ts(\?|$)/, async (route) => {
-    const res = await route.fetch()
-    const src = await res.text()
-    const out = src.replace('marketStatus: () => get(', 'marketLive: () => get("/api/market/live", { cache: "no-store" }),\n    marketStatus: () => get(')
-    injected = out !== src
-    return route.fulfill({ response: res, body: out })
-  })
   const p = await ctx.newPage()
   if (clock) await p.clock.install()
   p.on('pageerror', (e) => errs.push('JS 錯誤：' + e.message))
   await p.goto(BASE + hash)
   await p.waitForFunction(() => document.getElementById('loading')?.hidden && /\S/.test(document.getElementById('h-upd')?.textContent || '') && document.querySelector('.page.on'), null, { timeout: 40000 })
-  if (inject && !injected) throw new Error('沒有補上 marketLive：要對 vite dev server 跑（/src/kupei-client.ts）')
   await p.waitForTimeout(800)
   return p
 }
@@ -214,12 +203,13 @@ await check('登入失效（live 回 401）：回到登入畫面、不再輪詢'
   await p.context().close(); return `live ${n0}`
 })
 
-await check('starter 還沒有 marketLive：不打 /api/market/live、照舊顯示證交所 MIS', async () => {
-  M.live = LIVE(); M.intraday = MIS; M.calls = []
-  const p = await open('', { inject: false })
-  must(liveCalls() === 0, '不該打 /api/market/live：' + liveCalls())
+await check('後端沒有 /api/market/live（404）：這次開頁面不再問、照舊顯示證交所 MIS', async () => {
+  M.live = { status: 404, code: 'NOT_FOUND' }; M.intraday = MIS; M.calls = []
+  const p = await open('')
+  const n0 = liveCalls()
+  must(n0 <= 1, '最多問一次：' + n0)
   must((await upd(p)).includes('證交所・約 10 分鐘延遲・10:15'), '標示：' + await upd(p))
-  await ff(p, 60500); must(liveCalls() === 0, '之後也不該打：' + liveCalls())
+  await ff(p, 60500); must(liveCalls() === n0, '之後不該再問：' + liveCalls())
   await p.context().close(); return 'ok'
 })
 

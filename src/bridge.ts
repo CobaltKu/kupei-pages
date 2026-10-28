@@ -12,7 +12,7 @@
 import './bridge.css'
 import { createKupeiClient, KupeiError, quoteOf } from './kupei-client'
 import type { Dataset } from './kupei-client'
-import type { History as Hist, LatestResponse, TreeNode } from './kupei-types'
+import type { History as Hist, LatestResponse, LiveQuotes, TreeNode } from './kupei-types'
 
 declare const __BUILD__: string
 
@@ -500,37 +500,26 @@ async function marketIntraday(): Promise<Intraday | null> {
  * 有資料且 stale=false（phase=OPEN）→ 價格用 FinMind；stale、503、斷線、starter 還沒有 marketLive → 退回盤中快照（MIS）。
  * 價格更新時發 'kupei:live' 事件，app.js 只重讀 /quotes、更新價格欄（不整頁重畫）。登出或登入失效時停止並清掉資料。
  */
-/** /api/market/live 的回應。starter 同步後改用 kupei-types 的 LiveQuotes */
-interface LiveQuotesLocal {
-  source: 'finmind'
-  phase: 'PRE' | 'OPEN' | 'CLOSED'
-  at: string
-  fetchedAt: string
-  stale: boolean
-  intervalSeconds: number
-  quotes: Record<string, [number | null, number | null, number | null, string]>
-}
 /** 驗證過、可以顯示的 FinMind 資料（只有 phase=OPEN 且 stale=false 才會有） */
 interface LiveView { at: string | null; hms: string | null; interval: number; quotes: Record<string, unknown> }
 const LIVE_CLOSED_MS = 600_000
 const LIVE = {
   started: false, stopped: false, off: false, busy: false, pending: false,
-  phase: null as LiveQuotesLocal['phase'] | null,
+  phase: null as LiveQuotes['phase'] | null,
   data: null as LiveView | null,
   interval: 30, fails: 0, until: 0, lastTry: 0, timer: 0,
   first: null as Promise<void> | null,
 }
-/** starter 同步前 kupei-client 沒有 marketLive：沒有就當不可用（走 MIS） */
-function liveFn(): (() => Promise<LiveQuotesLocal>) | null {
-  const f = (client as unknown as { marketLive?: () => Promise<LiveQuotesLocal> }).marketLive
-  return typeof f === 'function' ? () => f.call(client) : null
+/** starter 的 marketLive（2026-10-28 同步）；保留 null 分支給測試模擬「後端還沒有這個端點」 */
+function liveFn(): (() => Promise<LiveQuotes>) | null {
+  return typeof client.marketLive === 'function' ? () => client.marketLive() : null
 }
 function taipeiHms(x: string | null): string | null {
   const t = x ? Date.parse(x) : NaN
   return Number.isNaN(t) ? null : new Date(t + 8 * 3600e3).toISOString().slice(11, 19)
 }
 /** 回應結構不對＝當成失敗 */
-function cleanLive(v: unknown): { phase: LiveQuotesLocal['phase']; stale: boolean; view: LiveView } | null {
+function cleanLive(v: unknown): { phase: LiveQuotes['phase']; stale: boolean; view: LiveView } | null {
   if (!isObj(v) || v.source !== 'finmind' || !['PRE', 'OPEN', 'CLOSED'].includes(v.phase) || !isObj(v.quotes)) return null
   const at = isoOrNull(v.at)
   const iv = num(v.intervalSeconds)
