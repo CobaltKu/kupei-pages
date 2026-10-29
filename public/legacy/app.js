@@ -154,7 +154,7 @@ function wW(method,path,body,opt,onOk){opt=opt||{};opt.ver=SRV.wver;srvWrite(met
 function srvSetGroup(id,gid){
   var prev=groupOf(id),tg=W.groups.filter(function(x){return x.id===gid;})[0];
   wW('PUT','/watchlist/members/'+encodeURIComponent(id),{group_id:gid},null,function(w){
-    wFromServer(w);loadStockNews(id,true);closeMenu();reRender();
+    wFromServer(w);loadStockNews(id,true);closeMenu();reRender(id);
     toast(prev?'已從 '+prev.name+' 移到 '+tg.name:'已加入 '+tg.name);
   });
 }
@@ -168,9 +168,9 @@ function srvNewGroup(then){
 function srvRemove(id){
   var g=groupOf(id);if(!g)return;
   wW('DELETE','/watchlist/members/'+encodeURIComponent(id),null,null,function(res){
-    SRV.wver=res.version;g.ids.splice(g.ids.indexOf(id),1);closeMenu();reRender();
+    SRV.wver=res.version;g.ids.splice(g.ids.indexOf(id),1);closeMenu();reRender(id);
     toast('已從 '+g.name+' 移出 '+BYID[id].name,function(){
-      wW('PUT','/watchlist/members/'+encodeURIComponent(id),{group_id:res.group_id,position:res.position},null,function(w){wFromServer(w);reRender();toast('已復原');});
+      wW('PUT','/watchlist/members/'+encodeURIComponent(id),{group_id:res.group_id,position:res.position},null,function(w){wFromServer(w);reRender(id);toast('已復原');});
     });
   });
 }
@@ -745,7 +745,15 @@ function confirmDelete(gid){
   $('menuHost').innerHTML=h;
 }
 function closeMenu(){$('menuHost').innerHTML='';}
-function reRender(){if(curPage==='watch')wRender();else hRender();}
+function reRender(id){
+  if(curPage==='watch'){wRender();return;}
+  /* 自選只改變該公司的按鈕與色點；手機首頁直接換單列，避免重建全市場清單造成跳位。 */
+  var one=isM()&&id&&$('mr-'+id);
+  if(one){
+    one.outerHTML=mRow(BYID[id]);return;
+  }
+  hRender();
+}
 
 /* ================= WATCH ================= */
 function curGroup(){var g=W.groups.filter(function(x){return x.id===W.cur;})[0];if(!g){g=W.groups[0];W.cur=g?g.id:null;}return g;}
@@ -1178,9 +1186,9 @@ document.addEventListener('click',function(e){
   if(d.menu){openMenu(d.menu,t);return;}
   if(d.close){closeMenu();return;}
   if(d.setg){if(t.getAttribute('aria-disabled')==='true'){toast('該群組已滿 '+GMAX+' 家');return;}var res=setGroup(d.id,+d.setg),gn=W.groups.filter(function(x){return x.id===+d.setg;})[0].name;
-    if(res.indexOf('moved:')===0)toast('已從 '+res.slice(6)+' 移到 '+gn);else if(res==='added')toast('已加入 '+gn);closeMenu();reRender();return;}
-  if(d.newg){if(W.groups.length>=5)return;var nid=W.groups.reduce(function(a,x){return Math.max(a,x.id);},0)+1;W.groups.push({id:nid,name:'自選'+nid,color:nextColor(),ids:[]});setGroup(d.newg,nid);toast('已新增 自選'+nid+' 並加入');closeMenu();reRender();return;}
-  if(d.rmg){var g=groupOf(d.rmg),rid2=d.rmg;if(g){var pos2=g.ids.indexOf(rid2);g.ids.splice(pos2,1);saveW();toast('已從 '+g.name+' 移出 '+BYID[rid2].name,function(){if(groupOf(rid2))return;g.ids.splice(pos2,0,rid2);saveW();reRender();});}closeMenu();reRender();return;}
+    if(res.indexOf('moved:')===0)toast('已從 '+res.slice(6)+' 移到 '+gn);else if(res==='added')toast('已加入 '+gn);closeMenu();reRender(d.id);return;}
+  if(d.newg){if(W.groups.length>=5)return;var nid=W.groups.reduce(function(a,x){return Math.max(a,x.id);},0)+1;W.groups.push({id:nid,name:'自選'+nid,color:nextColor(),ids:[]});setGroup(d.newg,nid);toast('已新增 自選'+nid+' 並加入');closeMenu();reRender(d.newg);return;}
+  if(d.rmg){var g=groupOf(d.rmg),rid2=d.rmg;if(g){var pos2=g.ids.indexOf(rid2);g.ids.splice(pos2,1);saveW();toast('已從 '+g.name+' 移出 '+BYID[rid2].name,function(){if(groupOf(rid2))return;g.ids.splice(pos2,0,rid2);saveW();reRender(rid2);});}closeMenu();reRender(rid2);return;}
   if(d.tab){W.cur=+d.tab;saveW();wRender();return;}
   if(d.gmenu){openGroupMenu(+d.gmenu,t);return;}
   if(d.gdel){confirmDelete(+d.gdel);return;}

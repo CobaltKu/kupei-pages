@@ -36,6 +36,26 @@ for (const [nm, w, h] of [['iPhone SE', 375, 667], ['iPhone 14', 390, 844], ['iP
     })
     if (nm === 'iPhone 14' && process.env.SHOTS) await p.screenshot({ path: `${process.env.SHOTS}/m_${PAGES.findIndex((x) => x[0] === k)}.png` })
   }
+  if (nm === 'iPhone 14') await check(`${nm}｜首頁新增自選後維持目前個股位置`, async () => {
+    await p.goto(BASE); await p.waitForFunction(() => document.querySelectorAll('#h-mlist .mrow').length > 100, null, { timeout: 40000 })
+    await p.waitForTimeout(2000) // 等全市場清單分批繪製完成，再模擬使用者捲動與操作
+    const id = await p.evaluate(() => {
+      const rows = [...document.querySelectorAll('#h-mlist .mrow')]
+      const row = rows.slice(40).find((x) => x.querySelector('.madd:not(.on)'))
+      if (!row) return null
+      const list = document.getElementById('h-mlist'); list.scrollTop = row.offsetTop - 120
+      return row.id.slice(3)
+    })
+    must(id, '找不到可加入自選的測試個股')
+    const before = await p.$eval(`#mr-${id}`, (x) => x.getBoundingClientRect().top)
+    // DOM click 模擬已在可視範圍內的手指點按；Playwright click 會先自動置中元素，反而改變被測的捲動位置。
+    await p.$eval(`#mr-${id} [data-menu="${id}"]`, (x) => x.click()); await p.$eval(`[data-setg][data-id="${id}"]`, (x) => x.click())
+    await p.waitForFunction((sid) => document.querySelector(`#mr-${sid} .madd.on`), id)
+    await p.waitForTimeout(1000) // 首頁分批補完其餘公司後才會還原較深的捲動位置
+    const after = await p.$eval(`#mr-${id}`, (x) => x.getBoundingClientRect().top)
+    must(Math.abs(after - before) <= 2, `新增自選後個股位置 ${before} → ${after}`)
+    return id
+  })
   await check(`${nm}｜帳號視窗（已登入、改密碼展開）：不超出畫面、輸入框 ≥16px`, async () => {
     await p.goto(BASE); await p.waitForTimeout(1500); await p.click('[data-acct]'); await p.waitForSelector('#acct-pw-box')
     await p.evaluate(() => { document.getElementById('acct-pw-box').open = true })
