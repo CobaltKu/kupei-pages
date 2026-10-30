@@ -285,7 +285,68 @@ function snapshotDay(intra: Intraday): string | null {
 }
 let mergedMemo: { latest: LatestResponse; intra: unknown; out: Json } | null = null
 let finmindMemo: { latest: LatestResponse; live: LiveView; out: Json } | null = null
-function adaptQuotesLive(latest: LatestResponse, intra: Intraday | null, live: LiveView | null = null): Json {
+let closeMemo: { latest: LatestResponse; view: LiveView; sig: string; out: Json } | null = null
+
+/*
+ * 收盤後、正式收盤還沒到（MARKET-05）：/api/market/live 在 phase=CLOSED 仍回今天的 FinMind 收盤快照（closing=true），
+ * officialClose.L／O 說該市場的每日收盤是否已經是快照那天。
+ * 每個市場各自決定：officialClose 為 true 且手上的 latest.dates[市場] 已經是快照那天 → 用每日收盤；否則用 FinMind 收盤快照（標「正式收盤待更新」）。
+ * 兩個都已更新 → 跟原本一樣只用每日收盤。整份 /quotes 一次算完（原子切換，不會一半新一半舊）。
+ */
+function closeUse(latest: LatestResponse, c: CloseView): { L: boolean; O: boolean } {
+  return { L: c.official.L && latest.dates.L === c.day, O: c.official.O && latest.dates.O === c.day }
+}
+/** 台灣時間 15:30 之後仍有市場用快照 → 「正式收盤延遲」 */
+const CLOSE_LATE_MIN = 15 * 60 + 30
+function taipeiMin(): number {
+  const d = new Date(Date.now() + 8 * 3600e3)
+  return d.getUTCHours() * 60 + d.getUTCMinutes()
+}
+function closeLate(use: { L: boolean; O: boolean }): boolean {
+  return !(use.L && use.O) && taipeiMin() >= CLOSE_LATE_MIN
+}
+/**
+ * latest 沒有市場別（上市／上櫃），混合狀態（一個市場已更新、另一個還沒）用數字判斷這一檔的 latest 是不是今天的：
+ * 今天的每日收盤與 FinMind 快照是同一個參考價（收盤 − 漲跌 ＝ 昨收 ＝ 快照價 − 快照漲跌）；
+ * 還沒更新的那個市場，latest 收盤本身就是昨收。分不出來（漲跌都是 0、沒有成交、缺值）就當還沒更新，用快照（價格相同，只差標示）。
+ */
+function latestIsToday(lq: unknown, p: number | null, pc: number | null): boolean {
+  if (!Array.isArray(lq) || p == null || pc == null) return false
+  const c = num(lq[0]), ch = num(lq[1])
+  if (c == null || ch == null) return false
+  const ref = p - pc
+  const eq = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b))
+  return eq(c - ch, ref) && !eq(c, ref)
+}
+function adaptQuotesClose(latest: LatestResponse, c: CloseView): Json {
+  const base = adaptQuotes(latest)
+  const use = closeUse(latest, c)
+  if (use.L && use.O) return base // 正式收盤都到了：標示照舊
+  const late = closeLate(use)
+  const sig = `${use.L}|${use.O}|${late}`
+  if (closeMemo && closeMemo.latest === latest && closeMemo.view === c.view && closeMemo.sig === sig) return closeMemo.out
+  const mixed = use.L || use.O
+  const quotes: Json = { ...base.quotes }
+  for (const [id, t] of Object.entries(c.view.quotes)) {
+    if (!/^\d{4}$/.test(id) || !Array.isArray(t)) continue
+    const price = num(t[0]), change = num(t[1]), volume = num(t[2])
+    if (mixed && latestIsToday(latest.quotes[id], price, change)) continue // 這檔屬於已更新的市場：用每日收盤
+    const prev = price != null && change != null ? price - change : null
+    quotes[id] = {
+      price, prev_close: prev, change, change_pct: prev ? (change! / prev) * 100 : null, volume,
+      status: 'CLOSING', source_time: typeof t[3] === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(t[3]) ? t[3] : null,
+    }
+  }
+  const out = {
+    ...base, market_status: 'CLOSED', trading_date: c.day, last_success_at: c.view.at, seq: 0, quotes, intraday: null,
+    closing: { source: 'finmind', day: c.day, hms: c.view.hms, at: c.view.at, pending: { L: !use.L, O: !use.O }, late },
+  }
+  closeMemo = { latest, view: c.view, sig, out }
+  return out
+}
+
+function adaptQuotesLive(latest: LatestResponse, intra: Intraday | null, live: LiveView | null = null, close: CloseView | null = null): Json {
+  if (close && !live) return adaptQuotesClose(latest, close)
   const base = adaptQuotes(latest)
   // FinMind 盤中價（登入後約 30 秒更新）：有就優先用，盤中快照（MIS）不看
   if (live) {
@@ -502,11 +563,24 @@ async function marketIntraday(): Promise<Intraday | null> {
  */
 /** 驗證過、可以顯示的 FinMind 資料（只有 phase=OPEN 且 stale=false 才會有） */
 interface LiveView { at: string | null; hms: string | null; interval: number; quotes: Record<string, unknown> }
+/**
+ * 收盤後的 FinMind 收盤快照（MARKET-05）：phase=CLOSED、stale=false、closing=true、快照日期是今天才有。
+ * official：該市場的每日收盤（/api/market/latest）是否已經是快照那天（後端的 officialClose）。
+ */
+interface CloseView { day: string; view: LiveView; official: { L: boolean; O: boolean } }
 const LIVE_CLOSED_MS = 600_000
+/** 收盤快照期間（還有市場的正式收盤沒到）：每 5 分鐘重讀 live 看 officialClose 有沒有變 */
+const LIVE_CLOSING_MS = 300_000
+/** officialClose 已是 true、但手上的 latest 還是舊的（starter／瀏覽器快取 60 秒）：65 秒後再讀，最多幾次就回到 5 分鐘 */
+const LIVE_CATCHUP_MS = 65_000
+const LIVE_CATCHUP_MAX = 4
 const LIVE = {
   started: false, stopped: false, off: false, busy: false, pending: false,
   phase: null as LiveQuotes['phase'] | null,
   data: null as LiveView | null,
+  close: null as CloseView | null,
+  closeSig: '',
+  catchup: 0,
   interval: 30, fails: 0, until: 0, lastTry: 0, timer: 0,
   first: null as Promise<void> | null,
 }
@@ -518,20 +592,74 @@ function taipeiHms(x: string | null): string | null {
   const t = x ? Date.parse(x) : NaN
   return Number.isNaN(t) ? null : new Date(t + 8 * 3600e3).toISOString().slice(11, 19)
 }
+type CleanLive = { phase: LiveQuotes['phase']; stale: boolean; closing: boolean; official: { L: boolean; O: boolean }; view: LiveView }
 /** 回應結構不對＝當成失敗 */
-function cleanLive(v: unknown): { phase: LiveQuotes['phase']; stale: boolean; view: LiveView } | null {
+function cleanLive(v: unknown): CleanLive | null {
   if (!isObj(v) || v.source !== 'finmind' || !['PRE', 'OPEN', 'CLOSED'].includes(v.phase) || !isObj(v.quotes)) return null
   const at = isoOrNull(v.at)
   const iv = num(v.intervalSeconds)
-  return { phase: v.phase, stale: v.stale !== false, view: { at, hms: taipeiHms(at), interval: iv && iv >= 30 && iv <= 300 ? Math.round(iv) : 30, quotes: v.quotes } }
+  // MARKET-05 新欄位（starter 型別還沒有）：寬鬆讀，缺少＝false（舊後端照原本的收盤行為）。
+  // starter 同步後改用 LiveQuotes.closing／officialClose
+  const closing = (v as { closing?: unknown }).closing === true
+  const oc = (v as { officialClose?: unknown }).officialClose
+  const official = { L: isObj(oc) && oc.L === true, O: isObj(oc) && oc.O === true }
+  return { phase: v.phase, stale: v.stale !== false, closing, official, view: { at, hms: taipeiHms(at), interval: iv && iv >= 30 && iv <= 300 ? Math.round(iv) : 30, quotes: v.quotes } }
 }
-function liveSet(d: LiveView | null) {
+/** 台灣日期（ISO 時間 → YYYY-MM-DD） */
+function taipeiDay(x: string | null): string | null {
+  const t = x ? Date.parse(x) : NaN
+  return Number.isNaN(t) ? null : new Date(t + 8 * 3600e3).toISOString().slice(0, 10)
+}
+/** 收盤快照：phase=CLOSED、stale=false、closing=true，而且快照日期是今天（不是今天的不用，照舊退回每日收盤） */
+function closeOf(d: CleanLive): CloseView | null {
+  if (d.phase !== 'CLOSED' || d.stale || !d.closing) return null
+  const day = taipeiDay(d.view.at)
+  return day && day === taipeiToday() ? { day, view: d.view, official: d.official } : null
+}
+/** 目前要用哪些市場的每日收盤（手上那份 latest 的日期也要到快照那天才算） */
+function closeUseNow(c: CloseView): { L: boolean; O: boolean } {
+  const lt = latestHeld?.v
+  return lt ? closeUse(lt, c) : { L: false, O: false }
+}
+function closeSig(): string {
+  const c = LIVE.close
+  if (!c) return ''
+  const use = closeUseNow(c)
+  return `${c.day}|${c.view.at}|${use.L}|${use.O}|${closeLate(use)}`
+}
+/**
+ * 換上新的盤中價（d）與收盤快照（c），有變才發一次 'kupei:live'（盤中轉收盤快照時只通知一次，不會先閃一下前一天的收盤）。
+ * 同一個資料時間就沿用舊物件：/quotes 的轉換結果與 app.js 的比對都不變，不重畫。
+ */
+function liveApply(d: LiveView | null, c: CloseView | null) {
+  let changed = false
   const prev = LIVE.data
-  // 同一個資料時間就沿用舊物件：/quotes 的轉換結果與 app.js 的比對都不變，不重畫
-  if (d && prev && d.at === prev.at && d.at) return
-  if (!d && !prev) return
-  LIVE.data = d
-  window.dispatchEvent(new Event('kupei:live'))
+  if (!(d && prev && d.at === prev.at && d.at) && (d || prev)) { LIVE.data = d; changed = true }
+  if (c && LIVE.close && LIVE.close.day === c.day && LIVE.close.view.at === c.view.at) c = { ...c, view: LIVE.close.view }
+  LIVE.close = c
+  const sig = closeSig()
+  if (sig !== LIVE.closeSig) { LIVE.closeSig = sig; changed = true }
+  if (changed) window.dispatchEvent(new Event('kupei:live'))
+}
+/** 收盤快照期間下一次讀 live 的時間 */
+function closeNext(c: CloseView): number {
+  const use = closeUseNow(c)
+  if (use.L && use.O) { LIVE.catchup = 0; return LIVE_CLOSED_MS } // 都換成正式收盤：停止 5 分鐘重讀，回到收盤後的 10 分鐘檢查
+  const behind = (['L', 'O'] as const).some((m) => c.official[m] && !use[m])
+  let next = LIVE_CLOSING_MS
+  if (behind && LIVE.catchup < LIVE_CATCHUP_MAX) { LIVE.catchup++; next = LIVE_CATCHUP_MS } else if (!behind) LIVE.catchup = 0
+  // 15:30 一到就要標「正式收盤延遲」：計時器不要跨過 15:30
+  const msOfDay = (Date.now() + 8 * 3600e3) % 86400e3
+  const toLate = CLOSE_LATE_MIN * 60e3 - msOfDay
+  if (toLate > 0) next = Math.min(next, toLate + 1000)
+  return next
+}
+/** officialClose 有 true 的時候：重讀一次每日收盤（starter 60 秒內共用同一份）；失敗就維持手上那份 */
+async function refreshLatest(): Promise<void> {
+  try {
+    const v = await client.marketLatest()
+    if (!latestHeld || latestHeld.v !== v) latestHeld = { at: Date.now(), v }
+  } catch { /* 下一次再讀 */ }
 }
 function liveSchedule(ms: number) {
   window.clearTimeout(LIVE.timer)
@@ -542,7 +670,7 @@ async function liveTick(): Promise<void> {
   if (!client.getSession()) return liveStop()
   if (document.visibilityState !== 'visible') { LIVE.pending = true; return } // 回到分頁時補
   const fn = liveFn()
-  if (!fn) { LIVE.off = true; return liveSet(null) }
+  if (!fn) { LIVE.off = true; return liveApply(null, null) }
   LIVE.busy = true
   LIVE.pending = false
   LIVE.lastTry = Date.now()
@@ -554,13 +682,16 @@ async function liveTick(): Promise<void> {
     LIVE.fails = 0
     LIVE.phase = d.phase
     LIVE.interval = d.view.interval
-    liveSet(d.phase === 'OPEN' && !d.stale ? d.view : null)
-    next = d.phase === 'OPEN' ? d.view.interval * 1000 : LIVE_CLOSED_MS
+    const cv = closeOf(d)
+    if (cv && (cv.official.L || cv.official.O)) await refreshLatest() // 先拿到新的每日收盤再換，一次換完
+    if (LIVE.stopped) return
+    liveApply(d.phase === 'OPEN' && !d.stale ? d.view : null, cv)
+    next = d.phase === 'OPEN' ? d.view.interval * 1000 : cv ? closeNext(cv) : LIVE_CLOSED_MS
   } catch (e) {
     if (LIVE.stopped) return
-    liveSet(null)
-    if (e instanceof KupeiError && e.status === 401) return liveStop() // starter 已清 session → lockOut
-    if (e instanceof KupeiError && (e.code === 'FORBIDDEN' || e.status === 404)) { LIVE.off = true; return } // 後端沒有這個端點
+    if (e instanceof KupeiError && e.status === 401) { liveApply(null, null); return liveStop() } // starter 已清 session → lockOut
+    if (e instanceof KupeiError && (e.code === 'FORBIDDEN' || e.status === 404)) { LIVE.off = true; return liveApply(null, null) } // 後端沒有這個端點
+    liveApply(null, LIVE.close) // 收盤快照期間暫時讀不到：維持快照，不退回前一交易日
     if (e instanceof KupeiError && e.status === 429) {
       next = Math.max(30, e.retryAfter ?? 30) * 1000
       LIVE.until = Date.now() + next
@@ -568,7 +699,8 @@ async function liveTick(): Promise<void> {
       LIVE.fails++
       next = Math.min(LIVE_CLOSED_MS, 30_000 * 2 ** (LIVE.fails - 1))
     }
-    if (LIVE.phase === 'PRE' || LIVE.phase === 'CLOSED') next = Math.max(next, LIVE_CLOSED_MS)
+    if (LIVE.close) next = Math.max(next, LIVE_CLOSING_MS)
+    else if (LIVE.phase === 'PRE' || LIVE.phase === 'CLOSED') next = Math.max(next, LIVE_CLOSED_MS)
   } finally {
     LIVE.busy = false
   }
@@ -585,7 +717,10 @@ function liveStop() {
   window.clearTimeout(LIVE.timer)
   LIVE.timer = 0
   LIVE.data = null
+  LIVE.close = null
+  LIVE.closeSig = ''
   finmindMemo = null
+  closeMemo = null
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !LIVE.started || LIVE.stopped || LIVE.off || LIVE.busy) return
@@ -599,10 +734,13 @@ document.addEventListener('visibilitychange', () => {
 function liveFirst(): Promise<unknown> {
   return LIVE.first ? Promise.race([LIVE.first, new Promise((r) => window.setTimeout(r, 1500))]) : Promise.resolve()
 }
-/** FinMind 有資料時，每日收盤沿用手上那份（最多 10 分鐘），不跟著 30 秒重讀 /api/market/latest */
+/**
+ * FinMind 有資料時，每日收盤沿用手上那份（最多 10 分鐘），不跟著 30 秒重讀 /api/market/latest。
+ * 收盤快照期間也一樣：要不要換成正式收盤由 liveTick 讀 live／latest 後決定（refreshLatest），畫面跟著那份走。
+ */
 let latestHeld: { at: number; v: LatestResponse } | null = null
 async function latestForQuotes(): Promise<LatestResponse> {
-  if (LIVE.data && latestHeld && Date.now() - latestHeld.at < LIVE_CLOSED_MS) return latestHeld.v
+  if ((LIVE.data || LIVE.close) && latestHeld && Date.now() - latestHeld.at < LIVE_CLOSED_MS) return latestHeld.v
   const v = await client.marketLatest()
   if (!latestHeld || latestHeld.v !== v) latestHeld = { at: Date.now(), v }
   return v
@@ -929,11 +1067,11 @@ async function req(method: string, path: string, body?: unknown, headers?: Recor
   try {
     if (m === 'GET' && p === '/quotes') {
       // FinMind 有資料就不讀盤中快照；沒有（或第一次還沒回來）時與收盤並行讀，退回 MIS 不多等
-      const pre = LIVE.data ? null : marketIntraday()
+      const pre = LIVE.data || LIVE.close ? null : marketIntraday()
       const [latest] = await Promise.all([latestForQuotes(), liveFirst()])
-      const live = LIVE.data
-      const intra = live ? null : await (pre ?? marketIntraday())
-      return ok(adaptQuotesLive(latest, intra, live))
+      const live = LIVE.data, close = live ? null : LIVE.close
+      const intra = live || close ? null : await (pre ?? marketIntraday())
+      return ok(adaptQuotesLive(latest, intra, live, close))
     }
     // 新聞：關鍵字來自本機新聞設定；產業依 span（1／3 天），個股固定近 5 日。date 參數後端不支援，忽略
     if (m === 'GET' && p === '/news/industry') {
