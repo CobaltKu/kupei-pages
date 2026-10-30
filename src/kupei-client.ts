@@ -19,8 +19,10 @@
 //   8. 可選批次檔（help.json 說明頁、valuation.json 估價、node_info.json 節點完整定義）：不在 loadDataset 裡，
 //      要用時才呼叫 loadHelp()／loadValuation()／loadNodeInfo()。這個批次沒交付（manifest.hashes 沒有該鍵）→ 回 null、
 //      不打網路；有就帶 ?v=<雜湊> 抓一次，同一個批次之後直接回記憶體，換批次才重抓。內容形狀由批次交付方決定，用前自己檢查。
-//   9. 新聞與報告：news() 後端代抓 Google 新聞（瀏覽器可留 5 分鐘）；reports()／report() 讀報告 metadata（檔案只有外部連結）。
+//   9. 新聞與報告：news() 後端代抓 Google／Bing 新聞（瀏覽器可留 5 分鐘）；帶 kind（industry／stock）是精準查詢，另加科技新報、
+//      依原文網址去重、每則有 matchedKeywords（2026-10-30）；reports()／report() 讀報告 metadata（檔案只有外部連結）。
 //      requestReport()／reportRequests() 只限登入（沒登入丟 401 UNAUTHENTICATED、不打網路）；報告由外部管線產生，不要輪詢進度。
+//      requestReport 可帶設定（2026-10-30，REPORT-01）；reportSchedules.list／create／get／remove 管理自己的排程（只限登入）。
 //  10. 報告參考檔（2026-10-28）：reportInputs.upload／list／download／remove／unlock 只限登入（沒登入丟 401、不打網路）。
 //      upload 在瀏覽器算 SHA-256、依副檔名決定 Content-Type（不靠瀏覽器猜），本文是檔案原始位元組；只看得到自己上傳的。
 //
@@ -43,9 +45,12 @@
 //   kupei.getSession()                                   // { username, expiresAt } | null，同步、不打網路
 //   await kupei.store.update('watchlist', (cur) => ({ ...(cur ?? {}), groups }))   // 跨裝置同步（依帳號）
 //   await kupei.auth.logout()
-//   const { items, stale } = await kupei.news({ q: ['台積電', '2330'], exclude: ['廣告'], days: 3 })
+//   const { items, stale } = await kupei.news({ q: ['台積電', '2330'], exclude: ['廣告'], days: 3 })   // 舊版：q 之間 OR
+//   const ind = await kupei.news({ kind: 'industry', q: ['AI', '半導體', '散熱'], exclude: ['廣告'] })    // 精準：至少命中 2 個字
+//   const stk = await kupei.news({ kind: 'stock', code: '2330', name: '台積電', topics: ['法說會', '外資'] }) // 精準：公司＋主題詞
 //   const reports = await kupei.reports('2330')           // 列表（不含 summary）；kupei.report('2330', '2026Q2', 1) 含 summary
-//   await kupei.requestReport('2330', '2026Q2')           // 登入後才能送；進度看 kupei.reportRequests('2330')
+//   await kupei.requestReport('2330', '2026Q2', { keywords: ['台積電', '2330'] })   // 登入後才能送；設定可省略；進度看 kupei.reportRequests('2330')
+//   await kupei.reportSchedules.create({ code: '2330', period: 'PREVIOUS_QUARTER', frequency: 'weekly', weekday: 1, time: '09:00' })
 //   const input = await kupei.reportInputs.upload('2330', file)   // <input type="file"> 的 File；≤ 20 MiB、pdf/txt/md/csv/xlsx/png/jpg
 //   const blob = await kupei.reportInputs.download('2330', input.id)   // 只限自己上傳的；kupei.reportInputs.remove(...) 刪除
 //   await kupei.reportInputs.unlock('2330', input.id)   // 沒有報告再引用時解鎖（之後才能刪）；仍被引用 409 INPUT_REFERENCED
@@ -66,6 +71,8 @@ import type {
   Major,
   Manifest,
   MarketStatus,
+  MatchedNewsQuery,
+  MatchedNewsResponse,
   NewsQuery,
   NewsResponse,
   NewsSource,
@@ -79,6 +86,9 @@ import type {
   ReportInputMime,
   ReportRequest,
   ReportRequestCreated,
+  ReportSchedule,
+  ReportScheduleInput,
+  ReportSettingsInput,
   ResetPasswordBody,
   SessionInfo,
   StoredSession,
@@ -358,6 +368,36 @@ export function createKupeiClient(cfg: KupeiConfig) {
       return get<T>(path, { ...opts, retried: true })
     }
     throw err
+  }
+
+  /**
+   * 新聞（後端代抓，只有標題、來源、時間、原文連結；精準查詢另有摘要。不抓全文）。瀏覽器快取 5 分鐘（伺服器同一查詢 30 分鐘只抓一次）。
+   * - 舊版 news({ q, exclude, days })：q 1～5 個關鍵字（之間 OR）、只有 Google／Bing。回 NewsResponse。
+   * - 精準 news({ kind: 'industry', q, … })：q 2～5 個，一則要命中至少 2 個不同的字。
+   *   news({ kind: 'stock', code, name, topics, … })：要命中公司名稱或代號＋至少 1 個主題詞（名稱與代號不算主題詞）。
+   *   兩者都是 Google／Bing＋科技新報合併、依原文網址去重，每則有 media、via、matchedKeywords。回 MatchedNewsResponse。
+   *   關鍵字不夠 → 400 NOT_ENOUGH_KEYWORDS（不會退回單字 OR）。
+   * exclude 0～5 個排除字（只比對標題）；每個字 1～50 字、不能含逗號；days 1、3、5（省略＝3）。
+   * 其他不合法 400 BAD_REQUEST；來源抓不到且沒有舊結果 502 UPSTREAM_ERROR。stale 為 true＝較舊的結果。
+   */
+  function news(query: NewsQuery): Promise<NewsResponse>
+  function news(query: MatchedNewsQuery): Promise<MatchedNewsResponse>
+  function news(query: NewsQuery | MatchedNewsQuery): Promise<NewsResponse | MatchedNewsResponse> {
+    const list = (a: string[]) => a.map((x) => x.trim()).join(',')
+    const params = new URLSearchParams()
+    if (!('kind' in query)) params.set('q', list(query.q))
+    else if (query.kind === 'industry') {
+      params.set('kind', 'industry')
+      params.set('q', list(query.q))
+    } else {
+      params.set('kind', 'stock')
+      params.set('code', query.code.trim())
+      if (query.name?.trim()) params.set('name', query.name.trim())
+      params.set('topics', list(query.topics))
+    }
+    if (query.exclude?.length) params.set('exclude', list(query.exclude))
+    if (query.days !== undefined) params.set('days', String(query.days))
+    return get<NewsResponse | MatchedNewsResponse>(`/api/news?${params}`)
   }
 
   /** 報告參考檔要登入：沒登入丟 401、不打網路 */
@@ -722,20 +762,14 @@ export function createKupeiClient(cfg: KupeiConfig) {
 
     // ── 新聞與報告（2026-10-27）：唯讀、寫入、登入權杖都能讀；產生請求只限登入 ──
 
-    /**
-     * 新聞（後端代抓 Google 新聞，只有標題、來源、時間、原文連結）。q 1～5 個關鍵字（之間 OR）、exclude 0～5 個排除字（只比對標題），
-     * 每個 1～50 字、不能含逗號；days 1、3、5（省略＝3）。不合法 400 BAD_REQUEST；來源抓不到且沒有舊結果 502 UPSTREAM_ERROR。
-     * 回應 stale 為 true＝來源暫時抓不到、這是較舊的結果。瀏覽器快取 5 分鐘（伺服器同一查詢 30 分鐘只抓一次）
-     */
-    news(query: NewsQuery): Promise<NewsResponse> {
-      const params = new URLSearchParams({ q: query.q.map((x) => x.trim()).join(',') })
-      if (query.exclude?.length) params.set('exclude', query.exclude.map((x) => x.trim()).join(','))
-      if (query.days !== undefined) params.set('days', String(query.days))
-      return get<NewsResponse>(`/api/news?${params}`)
-    },
+    /** 新聞：見上面的 news()（舊版 q 之間 OR；kind: 'industry'／'stock' 是精準查詢） */
+    news,
 
-    /** 新聞來源清單（目前只有 Google 新聞） */
-    newsSources: async () => (await get<{ sources: NewsSource[] }>('/api/news/sources')).sources,
+    /**
+     * 新聞來源清單。預設 3 個（後端會抓的 Google 新聞、Bing 新聞、科技新報）；{ all: true } 回完整 14 個
+     * （另含只列入口、不擷取的媒體，看 accessMode 分辨；其中「工商時報」「經濟日報」也是新聞結果常見的媒體名稱，別當成聚合器）
+     */
+    newsSources: async (opts: { all?: boolean } = {}) => (await get<{ sources: NewsSource[] }>(`/api/news/sources${opts.all ? '?all=1' : ''}`)).sources,
 
     /** 一家公司的報告（不含 summary）：period 新→舊、同期 rev 新→舊。所有狀態（DRAFT／PUBLISHED／FAILED）都會列出 */
     reports: async (code: string) => (await get<{ reports: ReportMeta[] }>(`/api/reports/${encodeURIComponent(code)}`, { cache: 'no-store' })).reports,
@@ -745,18 +779,50 @@ export function createKupeiClient(cfg: KupeiConfig) {
       get<Report>(`/api/reports/${encodeURIComponent(code)}/${encodeURIComponent(period)}/${rev}`, { cache: 'no-store' }),
 
     /**
-     * 送出「產生報告」請求（要登入；沒登入丟 401 UNAUTHENTICATED、不打網路）。同一期已在排隊就回那一筆。
+     * 送出「產生報告」請求（要登入；沒登入丟 401 UNAUTHENTICATED、不打網路）。同一期、同樣設定已在排隊就回那一筆。
+     * settings（2026-10-30 起，可省略）：關鍵字、新聞、關注大項、比較上一版、參考檔，後端驗證後鎖成快照；格式不對或參考檔不是自己的 400 BAD_REQUEST。
+     * 回應的 rev 是後端配發的版號，報告產生後用 report(code, period, rev) 讀。
      * 每個帳號最多 20 筆排隊中，超過 403 QUOTA_EXCEEDED（details: { queued, maxQueued }）。報告由外部管線產生，完成時間不固定
      */
-    async requestReport(code: string, period: string): Promise<ReportRequestCreated> {
+    async requestReport(code: string, period: string, settings?: ReportSettingsInput): Promise<ReportRequestCreated> {
       const s = liveSession()
       if (!s) throw new KupeiError(401, 'UNAUTHENTICATED', '還沒登入', null)
       return get<ReportRequestCreated>(`/api/reports/${encodeURIComponent(code)}/requests`, {
         method: 'POST',
-        body: { period, trigger: 'MANUAL' },
+        body: settings ? { period, trigger: 'MANUAL', settings } : { period, trigger: 'MANUAL' },
         cache: 'no-store',
         token: s.token,
       })
+    },
+
+    // ── 報告排程（2026-10-30）：只限登入；只看得到、刪除自己的（別人的 404）。到期時後端建立 SCHEDULED 請求，報告仍由外部管線產生 ──
+    reportSchedules: {
+      /** 自己的排程（新→舊，最多 20 個） */
+      async list(): Promise<ReportSchedule[]> {
+        const s = requireSession()
+        return (await get<{ schedules: ReportSchedule[] }>('/api/reports/schedules', { cache: 'no-store', token: s.token })).schedules
+      },
+
+      /**
+       * 建立排程（回 201 的排程）。格式不對 400 BAD_REQUEST；每人最多 20 個，超過 403 QUOTA_EXCEEDED（details: { schedules, maxSchedules }）。
+       * 不能改，要改就刪掉再建。
+       */
+      async create(input: ReportScheduleInput): Promise<ReportSchedule> {
+        const s = requireSession()
+        return get<ReportSchedule>('/api/reports/schedules', { method: 'POST', body: input, cache: 'no-store', token: s.token })
+      },
+
+      /** 一個排程；不是自己的或不存在 404 */
+      async get(id: number): Promise<ReportSchedule> {
+        const s = requireSession()
+        return get<ReportSchedule>(`/api/reports/schedules/${id}`, { cache: 'no-store', token: s.token })
+      },
+
+      /** 刪除排程（已建立的請求不受影響）；不是自己的或不存在 404 */
+      async remove(id: number): Promise<{ status: 'ok' }> {
+        const s = requireSession()
+        return get<{ status: 'ok' }>(`/api/reports/schedules/${id}`, { method: 'DELETE', cache: 'no-store', token: s.token })
+      },
     },
 
     /** 自己在這家公司的產生請求（新→舊；要登入，沒登入丟 401、不打網路）。不要輪詢，回到頁面或手動重新整理時再查 */

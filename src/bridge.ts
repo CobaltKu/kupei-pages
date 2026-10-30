@@ -598,11 +598,10 @@ function cleanLive(v: unknown): CleanLive | null {
   if (!isObj(v) || v.source !== 'finmind' || !['PRE', 'OPEN', 'CLOSED'].includes(v.phase) || !isObj(v.quotes)) return null
   const at = isoOrNull(v.at)
   const iv = num(v.intervalSeconds)
-  // MARKET-05 新欄位（starter 型別還沒有）：寬鬆讀，缺少＝false（舊後端照原本的收盤行為）。
-  // starter 同步後改用 LiveQuotes.closing／officialClose
-  const closing = (v as { closing?: unknown }).closing === true
-  const oc = (v as { officialClose?: unknown }).officialClose
-  const official = { L: isObj(oc) && oc.L === true, O: isObj(oc) && oc.O === true }
+  // MARKET-05：LiveQuotes.closing／officialClose。舊後端沒有這兩個欄位＝false（照原本的收盤行為）
+  const q = v as unknown as Partial<Pick<LiveQuotes, 'closing' | 'officialClose'>>
+  const closing = q.closing === true
+  const official = { L: q.officialClose?.L === true, O: q.officialClose?.O === true }
   return { phase: v.phase, stale: v.stale !== false, closing, official, view: { at, hms: taipeiHms(at), interval: iv && iv >= 30 && iv <= 300 ? Math.round(iv) : 30, quotes: v.quotes } }
 }
 /** 台灣日期（ISO 時間 → YYYY-MM-DD） */

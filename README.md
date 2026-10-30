@@ -22,9 +22,8 @@ UI 不重算任何分數、名次或 Gate；後端沒有交付的資料顯示「
 
 - 登入後由 `src/bridge.ts` 讀 `GET /api/market/live`（FinMind 盤中價，只有登入權杖可讀）：盤中（`phase=OPEN`，還不知道時先試一次）且分頁可見時每 `intervalSeconds`（30 秒）讀一次；分頁隱藏不讀、回來立刻補一次；`PRE`／`CLOSED` 改每 10 分鐘檢查一次；同一時間只有一個請求；429 依 `Retry-After`（讀不到 30 秒）等，其他失敗 30 秒起加倍、最多 10 分鐘。
 - 有資料且 `stale=false`：價格與漲跌用 FinMind，標示「FinMind・HH:MM:SS」，狀態列、說明列、手機頁尾標「資料來源：FinMind」。`stale=true`、503、斷線、或 starter 還沒有 `kupei.marketLive()` → 退回證交所 MIS 盤中快照（`/api/market/intraday`），標「證交所・約 10 分鐘延遲・HH:MM」；FinMind 恢復後自動切回。
-- 收盤後、正式收盤還沒到（MARKET-05）：`/api/market/live` 在 `phase=CLOSED` 仍回今天的 FinMind 收盤快照（`closing=true`、`officialClose: { L, O }`）。上市、上櫃各自決定：`officialClose[市場]` 為 `false`（或手上的 `latest.dates[市場]` 還不是快照那天）→ 該市場個股用快照，狀態列標「M/D FinMind 收盤快照・正式收盤待更新」；兩個都到了 → 一次換成每日收盤、標示照舊。`latest` 沒有市場別，混合狀態用數字判斷個股的 `latest` 是不是今天的（今天的收盤 − 漲跌＝快照價 − 快照漲跌；還沒更新的那一檔收盤本身就是昨收；分不出來就用快照）。還有市場沒到時每 5 分鐘重讀 live（`officialClose` 已 true 但 `latest` 還是舊的：65 秒後再讀，最多 4 次），都到了停止、回到 10 分鐘檢查；台灣時間 15:30 後仍沒到標「⚠ 正式收盤延遲」，仍顯示快照；這段期間 live 暫時讀不到也維持快照。快照不是今天、`stale`、或舊後端沒有 `closing` 欄位 → 照原本退回每日收盤。`closing`／`officialClose` 目前在橋接層寬鬆讀（starter 型別還沒有），starter 同步後改用 `LiveQuotes.closing`／`officialClose`。
+- 收盤後、正式收盤還沒到（MARKET-05）：`/api/market/live` 在 `phase=CLOSED` 仍回今天的 FinMind 收盤快照（`closing=true`、`officialClose: { L, O }`）。上市、上櫃各自決定：`officialClose[市場]` 為 `false`（或手上的 `latest.dates[市場]` 還不是快照那天）→ 該市場個股用快照，狀態列標「M/D FinMind 收盤快照・正式收盤待更新」；兩個都到了 → 一次換成每日收盤、標示照舊。`latest` 沒有市場別，混合狀態用數字判斷個股的 `latest` 是不是今天的（今天的收盤 − 漲跌＝快照價 − 快照漲跌；還沒更新的那一檔收盤本身就是昨收；分不出來就用快照）。還有市場沒到時每 5 分鐘重讀 live（`officialClose` 已 true 但 `latest` 還是舊的：65 秒後再讀，最多 4 次），都到了停止、回到 10 分鐘檢查；台灣時間 15:30 後仍沒到標「⚠ 正式收盤延遲」，仍顯示快照；這段期間 live 暫時讀不到也維持快照。快照不是今天、`stale`、或舊後端沒有 `closing` 欄位 → 照原本退回每日收盤。`closing`／`officialClose` 用 starter 的 `LiveQuotes` 型別（2026-10-30 同步；舊後端沒有欄位時當 false）。後端另有選填 `markets: { L, O }`（closing 時附上各市場代號），之後可取代數字判斷。
 - 更新時只換價格與安全邊際格（首頁、自選頁不整頁重畫）。登出或登入失效時停止並清掉 FinMind 資料。
-- starter 尚未提供 `marketLive`：橋接層用 `LiveQuotesLocal`（欄位照契約）暫代型別，starter 同步後改用 `kupei-types` 的 `LiveQuotes`。
 
 ## 本機開發
 

@@ -727,7 +727,8 @@
             "type": "string",
             "format": "date-time"
           }
-        }
+        },
+        "description": "舊版查詢（沒帶 kind）的一則"
       },
       "NewsResponse": {
         "type": "object",
@@ -761,7 +762,8 @@
             ],
             "description": "上游暫時抓不到，這是較舊的快取結果"
           }
-        }
+        },
+        "description": "舊版查詢（沒帶 kind）的回應"
       },
       "NewsSources": {
         "type": "object",
@@ -770,6 +772,12 @@
             "type": "array",
             "items": {
               "type": "object",
+              "required": [
+                "id",
+                "name",
+                "url",
+                "accessMode"
+              ],
               "properties": {
                 "id": {
                   "type": "string"
@@ -779,6 +787,25 @@
                 },
                 "url": {
                   "type": "string"
+                },
+                "accessMode": {
+                  "type": "string",
+                  "enum": [
+                    "aggregator_rss",
+                    "official_rss",
+                    "pending_official_feed",
+                    "external_link"
+                  ],
+                  "description": "aggregator_rss／official_rss＝後端代抓；pending_official_feed（等官方 feed）、external_link（只列入口）＝不擷取"
+                },
+                "via": {
+                  "type": "string",
+                  "enum": [
+                    "bing",
+                    "google",
+                    "technews"
+                  ],
+                  "description": "只有後端會抓的三個才有；＝精準查詢每則的 via"
                 }
               }
             }
@@ -941,6 +968,11 @@
               "pattern": "^in_[0-9a-f]{32}$"
             },
             "description": "引用的參考檔 id（同一家公司、未刪除；推送後鎖定、不能刪）。不存在或已刪除 400 BAD_REQUEST，details: { missing }。覆寫或刪除報告後，沒有任何報告再引用的參考檔自動解鎖"
+          },
+          "requestId": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "選填（2026-10-30）：這一版是哪一筆請求的結果；路徑的 code／period／rev 要等於請求配發的，不符 409 VERSION_CONFLICT，沒有這筆 404"
           }
         },
         "description": "本文最多 300 KB"
@@ -950,7 +982,10 @@
         "required": [
           "id",
           "status",
-          "createdAt"
+          "createdAt",
+          "rev",
+          "settings",
+          "run"
         ],
         "properties": {
           "id": {
@@ -965,6 +1000,31 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "後端配發的報告版號（同 code＋period 遞增、不同帳號共用）；2026-10-30 之前建立的請求是 null"
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReportSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "設定快照；沒帶 settings（或 2026-10-30 之前建立）是 null"
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "建立當下的 manifest.run；讀不到 manifest 是 null"
           }
         }
       },
@@ -977,7 +1037,11 @@
           "status",
           "createdAt",
           "updatedAt",
-          "message"
+          "message",
+          "rev",
+          "settings",
+          "run",
+          "scheduleId"
         ],
         "properties": {
           "id": {
@@ -989,7 +1053,8 @@
           "trigger": {
             "type": "string",
             "enum": [
-              "MANUAL"
+              "MANUAL",
+              "SCHEDULED"
             ]
           },
           "status": {
@@ -1014,6 +1079,38 @@
               "string",
               "null"
             ]
+          },
+          "rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "後端配發的報告版號（同 code＋period 遞增、不同帳號共用）；2026-10-30 之前建立的請求是 null"
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReportSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "設定快照；沒帶 settings（或 2026-10-30 之前建立）是 null"
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "建立當下的 manifest.run；讀不到 manifest 是 null"
+          },
+          "scheduleId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "排程建立的（trigger SCHEDULED）＝哪個排程；否則 null"
           }
         }
       },
@@ -1025,7 +1122,13 @@
           "period",
           "trigger",
           "status",
-          "createdAt"
+          "createdAt",
+          "rev",
+          "settings",
+          "run",
+          "runHash",
+          "runHashes",
+          "scheduleId"
         ],
         "properties": {
           "id": {
@@ -1038,7 +1141,11 @@
             "type": "string"
           },
           "trigger": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "MANUAL",
+              "SCHEDULED"
+            ]
           },
           "status": {
             "type": "string",
@@ -1052,8 +1159,58 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "後端配發的報告版號（同 code＋period 遞增、不同帳號共用）；2026-10-30 之前建立的請求是 null"
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReportSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "設定快照；沒帶 settings（或 2026-10-30 之前建立）是 null"
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "建立當下的 manifest.run；讀不到 manifest 是 null"
+          },
+          "runHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "批次指紋：SHA-256（hex 前 16 位）of JSON.stringify([run, [[鍵, 值]…（鍵照字母排序）]])"
+          },
+          "runHashes": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "建立當下的 manifest.hashes；用來讀 /data/<run>/<檔>?v=<雜湊>（推送權杖可讀 /data/*，2026-10-30）"
+          },
+          "scheduleId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "排程建立的（trigger SCHEDULED）＝哪個排程；否則 null"
           }
-        }
+        },
+        "description": "快照欄位（rev、settings、run、runHash、runHashes）建立時鎖定，同一筆重取不變"
       },
       "StatusOk": {
         "type": "object",
@@ -1176,7 +1333,7 @@
       },
       "LiveQuotes": {
         "type": "object",
-        "description": "FinMind 全市場即時快照（K-54，2026-10-28）。後端盤中每 30 秒抓一次；只限登入帳號（FinMind 條款：即時資料不得對外公開）。頁面要標「資料來源：FinMind」。",
+        "description": "FinMind 全市場即時快照（K-54，2026-10-28）。後端盤中每 30 秒抓一次；只限登入帳號（FinMind 條款：即時資料不得對外公開）。頁面要標「資料來源：FinMind」。 2026-10-30（MARKET-05）：13:36 之後再抓一次收盤快照；closing／officialClose／markets 讓前端在每日收盤進來前顯示今天的收盤快照。",
         "required": [
           "source",
           "phase",
@@ -1184,6 +1341,8 @@
           "fetchedAt",
           "stale",
           "intervalSeconds",
+          "closing",
+          "officialClose",
           "quotes"
         ],
         "properties": {
@@ -1218,6 +1377,50 @@
           "intervalSeconds": {
             "type": "integer",
             "description": "後端抓取間隔，目前 30；前端輪詢不要比這個快"
+          },
+          "closing": {
+            "type": "boolean",
+            "description": "true＝phase 是 CLOSED 且快照日期（台灣）＝今天＝今天的 FinMind 收盤快照（此時 stale 一定是 false）；OPEN、PRE 或快照不是今天時 false（MARKET-05，2026-10-30）"
+          },
+          "officialClose": {
+            "type": "object",
+            "description": "各市場每日收盤（/api/market/latest）的日期是否已經＝快照日期（後端最多晚 60 秒反映）。closing 為 true 時，false 的市場用這份快照並標「FinMind 收盤快照／正式收盤待更新」，true 的市場改用 latest",
+            "required": [
+              "L",
+              "O"
+            ],
+            "properties": {
+              "L": {
+                "type": "boolean",
+                "description": "上市"
+              },
+              "O": {
+                "type": "boolean",
+                "description": "上櫃"
+              }
+            }
+          },
+          "markets": {
+            "type": "object",
+            "description": "選填，只在 closing 為 true 時才有：每檔屬於上市（L）或上櫃（O）的代號清單（排序）。來源是後端每日收盤最新交易日的代號，當天新上市櫃的可能兩邊都沒有、也可能列出快照沒有的代號",
+            "required": [
+              "L",
+              "O"
+            ],
+            "properties": {
+              "L": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "O": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "quotes": {
             "type": "object",
@@ -1297,6 +1500,339 @@
           "error": {
             "type": "string",
             "description": "DO 讀不到時才有"
+          },
+          "closingAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "最近一次收盤快照（13:36～13:50）成功的時間（UTC）；台灣日期＝今天＝今天的收盤快照已抓到（MARKET-05）"
+          }
+        }
+      },
+      "MatchedNewsItem": {
+        "type": "object",
+        "description": "精準查詢（kind=industry|stock）的一則",
+        "required": [
+          "title",
+          "url",
+          "source",
+          "media",
+          "via",
+          "publishedAt",
+          "summary",
+          "matchedKeywords"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "已去掉結尾的「 - 來源」"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "原文網址（https、已去 utm_* 等追蹤參數；Bing 轉址已還原；Google 轉址能解出原文才換，否則仍是 Google 連結）"
+          },
+          "source": {
+            "type": "string",
+            "description": "發布媒體（＝media）"
+          },
+          "media": {
+            "type": "string",
+            "description": "發布媒體，例如「經濟日報」「科技新報」"
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "bing",
+              "google",
+              "technews"
+            ],
+            "description": "從哪個來源抓到：bing／google（新聞聚合）、technews（科技新報 RSS）"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "來源 RSS 的摘要（去 HTML；可能是空字串）。不是全文"
+          },
+          "matchedKeywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "命中的關鍵字（NFKC＋小寫）；個股先列公司名稱／代號，再列主題詞"
+          }
+        }
+      },
+      "MatchedNewsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "fetchedAt",
+          "source",
+          "kind"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/MatchedNewsItem"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "news-aggregate"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "industry",
+              "stock"
+            ]
+          },
+          "stale": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "上游暫時抓不到，這是較舊的快取結果"
+          },
+          "partial": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Bing 與 Google 都抓不到，只有科技新報的結果（伺服器不快取）"
+          }
+        }
+      },
+      "ReportSettingsInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "keywords"
+        ],
+        "description": "產生報告的設定（2026-10-30，REPORT-01）。後端驗證、補預設值後鎖成快照（ReportSettings）。不認得的欄位 400",
+        "properties": {
+          "keywords": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50
+            },
+            "description": "去頭尾空白、重複的去掉後要 2～10 個"
+          },
+          "includeNews": {
+            "type": "boolean",
+            "default": true
+          },
+          "focusMajors": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,32}$"
+            },
+            "default": [],
+            "description": "大項 id（K005）或代號（DAR-L），只檢查格式"
+          },
+          "comparePrevious": {
+            "type": "boolean",
+            "default": true
+          },
+          "inputIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^in_[0-9a-f]{32}$"
+            },
+            "default": [],
+            "description": "自己上傳到這家公司、未刪除的參考檔；不是的話 400 BAD_REQUEST，details: { missing }"
+          }
+        }
+      },
+      "ReportSettings": {
+        "type": "object",
+        "required": [
+          "keywords",
+          "includeNews",
+          "focusMajors",
+          "comparePrevious",
+          "inputIds"
+        ],
+        "description": "存下來的設定快照（預設值已補上）",
+        "properties": {
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "includeNews": {
+            "type": "boolean"
+          },
+          "focusMajors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "comparePrevious": {
+            "type": "boolean"
+          },
+          "inputIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ReportScheduleInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "period",
+          "frequency",
+          "time"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^\\d{4}$"
+          },
+          "period": {
+            "type": "string",
+            "description": "固定期別（^\\d{4}Q[1-4]$）或 CURRENT_QUARTER／PREVIOUS_QUARTER（到期時依台灣日期換算）"
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "once",
+              "daily",
+              "weekly"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "description": "台灣時間"
+          },
+          "weekday": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6,
+            "description": "weekly 必帶（0＝週日）；其他頻率不能帶"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "once 必帶（台灣日期），時間要在現在之後、366 天內；其他頻率不能帶"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ReportSettingsInput"
+          }
+        }
+      },
+      "ReportSchedule": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "period",
+          "frequency",
+          "time",
+          "weekday",
+          "date",
+          "settings",
+          "nextDueAt",
+          "lastDueAt",
+          "lastRequestId",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "once",
+              "daily",
+              "weekly"
+            ]
+          },
+          "time": {
+            "type": "string"
+          },
+          "weekday": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReportSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "設定快照；沒帶 settings（或 2026-10-30 之前建立）是 null"
+          },
+          "nextDueAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "下一個到期時間（UTC）；null＝不會再到期。實際建立請求是到期後第一次後端檢查（台灣平日 09:00～13:50 每 10 分鐘、每天 10:00），不是準點"
+          },
+          "lastDueAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastRequestId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "最近一次到期建立的請求；null＝還沒到期過，或那次沒建立（排隊已滿、同設定已在排隊、參考檔已刪、帳號停用）"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }
@@ -1988,7 +2524,7 @@
     "/api/market/live": {
       "get": {
         "summary": "FinMind 盤中即時快照（每 30 秒，只限登入）",
-        "description": "後端用 Durable Object 盤中（台灣交易日 09:00～13:35）每 30 秒抓一次 FinMind 全市場即時快照。**只限登入權杖（kps_）**與站長 cookie；唯讀、寫入、推送權杖 403。計入 /api/* 每分鐘 30 次。503 LIVE_UNAVAILABLE（後端沒啟用、還沒抓到、暫時讀不到）或 stale 為 true 時，前端改用 /api/market/intraday（證交所 MIS）。頁面要標「資料來源：FinMind」。",
+        "description": "後端用 Durable Object 盤中（台灣交易日 09:00～13:35）每 30 秒抓一次 FinMind 全市場即時快照，13:36 之後再抓一次收盤快照（2026-10-30）。**只限登入權杖（kps_）**與站長 cookie；唯讀、寫入、推送權杖 403。計入 /api/* 每分鐘 30 次。503 LIVE_UNAVAILABLE（後端沒啟用、還沒抓到、暫時讀不到）或 stale 為 true 時，前端改用 /api/market/intraday（證交所 MIS）。頁面要標「資料來源：FinMind」。 收盤後到每日收盤進來前：closing 為 true 時看 officialClose／markets（MARKET-05）。",
         "responses": {
           "200": {
             "description": "OK（Cache-Control: private, no-store）",
@@ -2637,16 +3173,58 @@
     },
     "/api/news": {
       "get": {
-        "summary": "新聞（後端代抓 Google 新聞 RSS；唯讀、寫入、登入權杖）",
+        "summary": "新聞（後端代抓；唯讀、寫入、登入權杖）。沒帶 kind＝舊版（Google／Bing，q 之間 OR）；kind=industry|stock＝精準查詢（Google／Bing＋科技新報，NEWS-03／NEWS-04，2026-10-30）",
         "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "industry",
+                "stock"
+              ]
+            },
+            "description": "省略＝舊版查詢（行為與回應不變）。industry：q 2～5 個，一則要在標題＋摘要命中至少 2 個不同的字。stock：code（＋name）＋topics，一則要命中公司名稱或代號至少一個、再命中主題詞至少一個（名稱與代號不算主題詞）"
+          },
           {
             "name": "q",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "1～5 個關鍵字，逗號分隔，每個 1～50 字；之間是 OR"
+            "description": "舊版（必填）：1～5 個關鍵字，逗號分隔，每個 1～50 字；之間是 OR。kind=industry（必填）：2～5 個，NFKC＋小寫去重後不到 2 個 → 400 NOT_ENOUGH_KEYWORDS。kind=stock 不能帶"
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}$"
+            },
+            "description": "kind=stock 必填：4 碼代號"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 50
+            },
+            "description": "kind=stock 選填：公司名稱（建議帶；沒帶就只認代號）"
+          },
+          {
+            "name": "topics",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "kind=stock 必填：1～5 個主題詞，逗號分隔，每個 1～50 字。等於或包含於公司名稱／代號的字會被拿掉；剩不到 1 個 → 400 NOT_ENOUGH_KEYWORDS"
           },
           {
             "name": "exclude",
@@ -2655,7 +3233,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "0～5 個排除字，逗號分隔，每個 1～50 字；只比對標題"
+            "description": "0～5 個排除字，逗號分隔，每個 1～50 字；只比對標題，任一命中即排除"
           },
           {
             "name": "days",
@@ -2674,17 +3252,24 @@
         ],
         "responses": {
           "200": {
-            "description": "新→舊、最多 50 則、只有 days 天內；Cache-Control: private, max-age=300。上游失敗但有舊快取時帶 stale: true",
+            "description": "新→舊、最多 50 則、只有 days 天內；Cache-Control: private, max-age=300。上游失敗但有舊快取時帶 stale: true。精準查詢在 Bing 與 Google 都抓不到時只回科技新報的結果並帶 partial: true",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NewsResponse"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/NewsResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MatchedNewsResponse"
+                    }
+                  ]
                 }
               }
             }
           },
           "400": {
-            "description": "參數不對",
+            "description": "參數不對（BAD_REQUEST），或精準查詢的關鍵字不夠（NOT_ENOUGH_KEYWORDS：產業 q 少於 2 個不同的字、個股 topics 去掉名稱／代號後少於 1 個；不會退回單字 OR）",
             "content": {
               "application/json": {
                 "schema": {
@@ -2731,7 +3316,7 @@
     },
     "/api/news/sources": {
       "get": {
-        "summary": "新聞來源清單（靜態）",
+        "summary": "新聞來源清單（靜態）。預設 3 個（後端會抓的 Google 新聞、Bing 新聞、科技新報）；all=1 回完整 14 個（另含只列入口、不擷取的媒體；看 accessMode）",
         "responses": {
           "200": {
             "description": "OK",
@@ -2749,7 +3334,21 @@
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "1＝回完整 14 個；省略或其他值＝預設 3 個"
+          }
+        ]
       }
     },
     "/api/reports/{code}": {
@@ -2919,6 +3518,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "帶 requestId 但沒有這筆請求（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "帶 requestId 時路徑的 code／period／rev 和請求配發的不一致（VERSION_CONFLICT，details: { requestId, code, period, rev }）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "description": "推送權杖專用：給產生報告的管線，不是給瀏覽器用。後端不存檔案，url 與 files[].url 只存外部 https 連結"
@@ -3013,6 +3632,9 @@
                       "MANUAL"
                     ],
                     "default": "MANUAL"
+                  },
+                  "settings": {
+                    "$ref": "#/components/schemas/ReportSettingsInput"
                   }
                 }
               }
@@ -3031,7 +3653,7 @@
             }
           },
           "200": {
-            "description": "同一期已經在排隊，回那一筆",
+            "description": "同一期、同樣設定已經在排隊，回那一筆",
             "content": {
               "application/json": {
                 "schema": {
@@ -3041,7 +3663,7 @@
             }
           },
           "400": {
-            "description": "內容或 code 不對",
+            "description": "內容或 code 不對；settings 格式不對；settings.inputIds 不是自己的參考檔（details: { missing }）",
             "content": {
               "application/json": {
                 "schema": {
@@ -3191,7 +3813,8 @@
               }
             }
           }
-        }
+        },
+        "description": "2026-10-30 起每筆帶設定快照、run、runHash、runHashes、rev（建立時鎖定，重取不變）。推送權杖也能 GET／HEAD /data/*，用 run／runHashes 讀該批次"
       }
     },
     "/api/reports/requests/{id}": {
@@ -3293,6 +3916,258 @@
           }
         },
         "description": "2026-10-28 起檢查狀態轉移（409 INVALID_TRANSITION）。建立超過 90 天的 DONE／FAILED 請求在 PATCH 時順便清掉（一次最多 20 筆）。"
+      }
+    },
+    "/api/reports/schedules": {
+      "get": {
+        "summary": "自己的報告排程（只限登入權杖，2026-10-30）",
+        "responses": {
+          "200": {
+            "description": "新→舊",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schedules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReportSchedule"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "不是登入權杖（FORBIDDEN）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
+      "post": {
+        "summary": "建立報告排程（只限登入權杖）：到期時後端建立 trigger SCHEDULED 的產生請求",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportScheduleInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已建立",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "內容不對；settings.inputIds 不是自己的參考檔（details: { missing }）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "不是登入權杖（FORBIDDEN），或已有 20 個排程（QUOTA_EXCEEDED，details: { schedules, maxSchedules }）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "本文超過 4 KB（TOO_LARGE）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/reports/schedules/{id}": {
+      "get": {
+        "summary": "一個報告排程（只限自己的）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSchedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "不是登入權杖（FORBIDDEN）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "不是自己的或不存在（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
+      "delete": {
+        "summary": "刪除報告排程（已建立的請求不受影響）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已刪除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOk"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "不是登入權杖（FORBIDDEN）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "不是自己的或不存在（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/reports/schedules/tick": {
+      "post": {
+        "summary": "立刻處理到期的報告排程（推送權杖專用，維運用）",
+        "security": [
+          {
+            "ingest": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "處理結果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "due",
+                    "created"
+                  ],
+                  "properties": {
+                    "due": {
+                      "type": "integer"
+                    },
+                    "created": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "推送權杖不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/reports/{code}/inputs": {

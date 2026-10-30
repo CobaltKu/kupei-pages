@@ -224,6 +224,25 @@ export interface LiveQuotes {
   stale: boolean
   /** 後端抓取間隔（秒），目前 30；前端輪詢不要比這個快 */
   intervalSeconds: number
+  /**
+   * true＝phase 是 CLOSED 且這份快照是今天（台灣）的＝今天的 FinMind 收盤快照（13:30 收盤後、13:36 再抓一次收盤快照）。
+   * 每日收盤（marketLatest）還沒更新到今天時，用這份顯示今天的收盤價，並標「FinMind 收盤快照／正式收盤待更新」（MARKET-05，2026-10-30）。
+   * OPEN、PRE 時一律 false
+   */
+  closing: boolean
+  /**
+   * 各市場的每日收盤（/api/market/latest 那份）日期是否已經＝這份快照的日期（L 上市、O 上櫃）。
+   * closing 為 true 時：該市場 true → 改用 marketLatest() 的正式收盤；false → 繼續用這份快照。
+   * 後端最多晚 60 秒反映（快取）；marketLatest() 本身瀏覽器也會留 60 秒
+   */
+  officialClose: { L: boolean; O: boolean }
+  /**
+   * 選填：每檔屬於上市（L）還是上櫃（O）的代號清單（已排序），**只在 closing 為 true 時才有**。
+   * 用來處理「上市正式收盤已進來、上櫃還沒」的混合狀態：L 清單的代號看 officialClose.L、O 清單的看 officialClose.O。
+   * 來源是後端 D1 各市場最新一個交易日的收盤代號（不是 FinMind 即時資料），當天新上市櫃的代號可能兩邊都沒有；
+   * 也可能列出這份快照沒有的代號。沒有這個欄位時不要猜，當成兩個市場都還沒更新
+   */
+  markets?: { L: string[]; O: string[] }
   quotes: Record<string, LiveQuote>
 }
 
@@ -376,7 +395,7 @@ export interface NewsResponse {
   stale?: true
 }
 
-/** kupei.news() 的參數。每個字 1～50 字、不能含逗號；q 1～5 個（之間是 OR）、exclude 0～5 個（只比對標題） */
+/** kupei.news() 的舊版參數（沒帶 kind）。每個字 1～50 字、不能含逗號；q 1～5 個（之間是 OR）、exclude 0～5 個（只比對標題）。要精準篩選用 MatchedNewsQuery */
 export interface NewsQuery {
   q: string[]
   exclude?: string[]
@@ -384,11 +403,70 @@ export interface NewsQuery {
   days?: 1 | 3 | 5
 }
 
-/** GET /api/news/sources */
+/**
+ * kupei.news() 的精準查詢（2026-10-30，NEWS-03／NEWS-04）：Google／Bing＋科技新報三來源合併、依原文網址去重。
+ * - 產業 kind: 'industry'：q 2～5 個關鍵字，一則要在標題＋摘要命中**至少 2 個不同的字**。
+ * - 個股 kind: 'stock'：要命中公司名稱（name）或代號（code）至少一個，**再**命中 topics 至少一個；名稱與代號不算主題詞。
+ * 排除字只比對標題。關鍵字不夠（產業去重後 < 2、個股主題詞去掉名稱／代號後 < 1）→ 400 NOT_ENOUGH_KEYWORDS（不會退回單字 OR）。
+ * 每個字 1～50 字、不能含逗號；days 省略＝3。
+ */
+export interface IndustryNewsQuery {
+  kind: 'industry'
+  q: string[]
+  exclude?: string[]
+  days?: 1 | 3 | 5
+}
+export interface StockNewsQuery {
+  kind: 'stock'
+  /** 4 碼代號 */
+  code: string
+  /** 公司名稱（建議帶；沒帶就只認代號） */
+  name?: string
+  topics: string[]
+  exclude?: string[]
+  days?: 1 | 3 | 5
+}
+export type MatchedNewsQuery = IndustryNewsQuery | StockNewsQuery
+
+/** 精準查詢的一則。url 是原文網址（https、已去追蹤參數；Google 解不出原文時是 Google 的轉址連結） */
+export interface MatchedNewsItem {
+  title: string
+  url: string
+  /** 發布媒體（＝media，與舊版 source 同義） */
+  source: string
+  /** 發布媒體，例如「經濟日報」「科技新報」 */
+  media: string
+  /** 從哪個來源抓到：bing／google（新聞聚合）、technews（科技新報 RSS） */
+  via: 'bing' | 'google' | 'technews'
+  /** ISO 8601（UTC） */
+  publishedAt: string
+  /** 來源 RSS 的摘要（去 HTML、最多 200 字；可能是空字串）。不是全文 */
+  summary: string
+  /** 命中的關鍵字（全形英數轉半形、小寫）；個股先列公司名稱／代號，再列主題詞 */
+  matchedKeywords: string[]
+}
+
+/** 精準查詢的回應。stale 同舊版；partial 為 true＝新聞聚合暫時抓不到，只有科技新報的結果 */
+export interface MatchedNewsResponse {
+  items: MatchedNewsItem[]
+  fetchedAt: string
+  source: 'news-aggregate'
+  kind: 'industry' | 'stock'
+  stale?: true
+  partial?: true
+}
+
+/**
+ * GET /api/news/sources：預設 3 個（後端會抓的 Google、Bing、科技新報）；?all=1（newsSources({ all: true })）14 個，含不擷取的媒體（2026-10-30）。accessMode：
+ * aggregator_rss（Google／Bing，後端代抓）、official_rss（科技新報，後端代抓）、
+ * pending_official_feed（等官方 feed，不擷取）、external_link（只列入口，不擷取）。via 只有後端會抓的三個才有。
+ */
 export interface NewsSource {
   id: string
   name: string
   url: string
+  accessMode?: 'aggregator_rss' | 'official_rss' | 'pending_official_feed' | 'external_link'
+  via?: 'bing' | 'google' | 'technews'
 }
 
 export type ReportStatus = 'DRAFT' | 'PUBLISHED' | 'FAILED'
@@ -461,21 +539,97 @@ export interface ReportInputReferencedDetails {
 
 export type ReportRequestStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
 
-/** POST /api/reports/<code>/requests 的回應（202 新排隊；200 同一期已在排隊，回那一筆） */
+/**
+ * 產生報告的設定（REPORT-01，2026-10-30）：requestReport／schedules.create 送出時帶，後端驗證後鎖成快照（之後改設定不影響已送出的請求）。
+ * keywords 必填 2～10 個（每個 1～50 字，重複的去掉）；其餘省略時：includeNews、comparePrevious＝true，focusMajors、inputIds＝[]。
+ * focusMajors：大項 id（summary.majors[].id，例如 K005）或代號（例如 DAR-L），≤ 12 個，後端只檢查格式。
+ * inputIds：自己上傳到這家公司、未刪除的參考檔 id（kupei.reportInputs），≤ 20 個；不是的話 400 BAD_REQUEST（details: { missing }）。
+ * 不認得的欄位 400（例如 include_news）。
+ */
+export interface ReportSettingsInput {
+  keywords: string[]
+  includeNews?: boolean
+  focusMajors?: string[]
+  comparePrevious?: boolean
+  inputIds?: string[]
+}
+
+/** 後端存下的設定快照（預設值已補上） */
+export interface ReportSettings {
+  keywords: string[]
+  includeNews: boolean
+  focusMajors: string[]
+  comparePrevious: boolean
+  inputIds: string[]
+}
+
+/** MANUAL＝使用者按「產生報告」；SCHEDULED＝排程到期由後端建立（2026-10-30） */
+export type ReportRequestTrigger = 'MANUAL' | 'SCHEDULED'
+
+/** POST /api/reports/<code>/requests 的回應（202 新排隊；200 同一期、同樣設定已在排隊，回那一筆） */
 export interface ReportRequestCreated {
   id: number
   status: 'QUEUED'
   createdAt: string
+  /** 後端配發的報告版號（同 code＋period 遞增）；報告產生後就是 report(code, period, rev) 的 rev（2026-10-30 起） */
+  rev: number | null
+  /** 鎖定的設定快照；沒帶 settings 是 null */
+  settings: ReportSettings | null
+  /** 建立當下的正式批次 manifest.run；後端讀不到 manifest 時 null */
+  run: string | null
 }
 
 /** GET /api/reports/<code>/requests 的一筆（只有自己的） */
 export interface ReportRequest {
   id: number
   period: string
-  trigger: 'MANUAL'
+  trigger: ReportRequestTrigger
   status: ReportRequestStatus
   createdAt: string
   updatedAt: string
   /** 管線留的說明，可能 null */
   message: string | null
+  /** 以下 2026-10-30 起（之前建立的請求都是 null） */
+  rev: number | null
+  settings: ReportSettings | null
+  run: string | null
+  /** 排程建立的（trigger SCHEDULED）＝哪個排程；否則 null */
+  scheduleId: number | null
+}
+
+/** 排程頻率：once＝date＋time 一次；daily＝每天 time；weekly＝每週 weekday 的 time。時間都是台灣時間 */
+export type ReportScheduleFrequency = 'once' | 'daily' | 'weekly'
+
+/**
+ * POST /api/reports/schedules 的本文（kupei.reportSchedules.create）。
+ * period：固定期別（'2026Q2'）或規則（'CURRENT_QUARTER'／'PREVIOUS_QUARTER'，到期時依台灣日期換算）。
+ * time 'HH:MM'；weekly 要 weekday（0＝週日 … 6＝週六）；once 要 date（'YYYY-MM-DD'，要在現在之後、366 天內）；其他頻率不能帶這兩個。
+ */
+export interface ReportScheduleInput {
+  code: string
+  period: string
+  frequency: ReportScheduleFrequency
+  time: string
+  weekday?: number
+  date?: string
+  settings?: ReportSettingsInput
+}
+
+/** 排程（只看得到自己的；別人的一律 404） */
+export interface ReportSchedule {
+  id: number
+  code: string
+  period: string
+  frequency: ReportScheduleFrequency
+  time: string
+  weekday: number | null
+  date: string | null
+  settings: ReportSettings | null
+  /** 下一個到期時段（ISO UTC）；null＝不會再到期（once 已觸發）。實際建立請求是到期後的第一個後端排程時間（不是準點） */
+  nextDueAt: string | null
+  /** 最近一次到期的時段；還沒到期過是 null */
+  lastDueAt: string | null
+  /** 最近一次到期建立的請求 id；null＝還沒到期過，或那次沒建立（排隊中已滿 20 筆、同樣設定已在排隊、參考檔已刪除） */
+  lastRequestId: number | null
+  createdAt: string
 }

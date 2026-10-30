@@ -50,7 +50,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.login()`（2026-10-28 起註冊預設關閉：`kupei.auth.config()` 的 `registrationOpen` 為 `true` 時才顯示註冊入口、呼叫 `kupei.auth.register()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。~~沒登入時 App 退回本機模式、評分與行情不需要登入~~（2026-10-28 起改成：沒登入就只顯示登入畫面，見第 0 條）。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
-12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存報告檔案。使用者要給報告管線的**參考檔**（PDF、圖片、試算表、文字檔）用 `kupei.reportInputs.upload(code, file)` 上傳（2026-10-28 起，只限登入；見「報告參考檔」一節），不要自己組上傳請求、不要把檔案轉 base64 放進 JSON 或雲端文件。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period)`，進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。報告是外部管線產生的，後端不會自己產生。
+12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；要精準篩選（2026-10-30 起）改用 `kupei.news({ kind: 'industry', q })`（至少命中 2 個字）或 `kupei.news({ kind: 'stock', code, name, topics })`（公司＋主題詞），會多科技新報、每則有 `media`、`via`、`matchedKeywords`（可顯示「命中：AI、半導體」），關鍵字不夠時丟 400 `NOT_ENOUGH_KEYWORDS`——顯示提示，不要自己改用舊版 OR 查詢；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存報告檔案。使用者要給報告管線的**參考檔**（PDF、圖片、試算表、文字檔）用 `kupei.reportInputs.upload(code, file)` 上傳（2026-10-28 起，只限登入；見「報告參考檔」一節），不要自己組上傳請求、不要把檔案轉 base64 放進 JSON 或雲端文件。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period, settings?)`（2026-10-30 起可帶設定：關鍵字 2～10 個、要不要新聞、關注大項、比較上一版、參考檔 id；送出後鎖成快照，回應的 `rev` 就是報告產生後的版號），進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。排程用 `kupei.reportSchedules.create／list／remove`（每人 20 個；到期時後端建立請求，**不是準點**，見「報告排程」）。報告是外部管線產生的，後端不會自己產生。
 
 ## 端點
 
@@ -136,11 +136,11 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 
 ### FinMind 盤中即時 `/api/market/live`（2026-10-28 新增，K-54）
 
-後端盤中（台灣交易日 09:00～13:35）**每 30 秒**抓一次 FinMind 全市場即時快照，這裡讀最新那一份。**只限登入帳號**（FinMind 條款：即時資料不得對外公開、不得原樣轉散布）；頁面要標「**資料來源：FinMind**」。`starter` 的 `kupei.marketLive()` 已包好（沒登入丟 401、不打網路）。
+後端盤中（台灣交易日 09:00～13:35）**每 30 秒**抓一次 FinMind 全市場即時快照，13:36 之後再抓一次**收盤快照**（2026-10-30，MARKET-05），這裡讀最新那一份。**只限登入帳號**（FinMind 條款：即時資料不得對外公開、不得原樣轉散布）；頁面要標「**資料來源：FinMind**」。`starter` 的 `kupei.marketLive()` 已包好（沒登入丟 401、不打網路）。
 
 | 路徑 | 說明 |
 | --- | --- |
-| `GET /api/market/live` | `{ source: "finmind", phase, at, fetchedAt, stale, intervalSeconds: 30, quotes: { "<代號>": [成交價, 漲跌, 累計成交量, "HH:MM:SS"] } }`。**只有登入權杖（`kps_`）**可讀；唯讀、寫入權杖 403 `FORBIDDEN`，沒權杖 401 |
+| `GET /api/market/live` | `{ source: "finmind", phase, at, fetchedAt, stale, intervalSeconds: 30, closing, officialClose: { L, O }, markets?: { L: [代號…], O: [代號…] }, quotes: { "<代號>": [成交價, 漲跌, 累計成交量, "HH:MM:SS"] } }`。**只有登入權杖（`kps_`）**可讀；唯讀、寫入權杖 403 `FORBIDDEN`，沒權杖 401 |
 | `POST /api/market/live/kick` | **推送權杖專用，前端不會用到**（維運手動啟動抓取） |
 
 - `phase`：同 `/api/market/intraday`（平日 09:00 前 `PRE`、09:00～13:30 `OPEN`、其餘 `CLOSED`）；後端的交易日曆確定今天休市時一律 `CLOSED`。
@@ -148,6 +148,11 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 - `stale`：`true` ＝ `OPEN` 時超過 120 秒沒抓到新的，或資料日期不是今天（開盤前、休市日）。**`stale` 為 `true` 時改用 `/api/market/intraday` 或標示資料時間**。
 - 報價：成交價 `null` ＝今天還沒有成交（漲跌也是 `null`）；漲跌 ＝ FinMind 的 `change_price`；累計成交量是 FinMind 的 `total_volume`（**單位照 FinMind**，與 `latest`、`intraday` 的「股」可能不同，顯示前先確認）；時間是台灣時間。只有 4 碼代號。漲跌幅 ＝ `漲跌 ÷ (成交價 − 漲跌)`。
 - **503 `LIVE_UNAVAILABLE`**：後端沒啟用、還沒抓到過、或暫時讀不到 → 改用 `kupei.marketIntraday()`。不要立刻重試，下一個輪詢間隔再問。
+- **收盤後到正式收盤進來之前**（2026-10-30 新增，MARKET-05；都是相容新增的欄位）：每日收盤（`/api/market/latest`）上市約 14:50、上櫃最晚可能到傍晚才更新，這段時間 `latest` 還是前一個交易日。
+  - `closing`：`true` ＝ `phase` 是 `CLOSED` 且這份快照是今天的＝**今天的 FinMind 收盤快照**（這時 `stale` 一定是 `false`）。`OPEN`、`PRE`、或快照不是今天（例如隔天早上）時 `false`。
+  - `officialClose`：`{ L, O }`，該市場 `latest` 的日期是否已經＝這份快照的日期（後端最多晚 60 秒反映）。OPEN 時也照實填。
+  - `markets`（**選填，只在 `closing` 為 `true` 時才有**）：每檔屬於上市（`L`）還是上櫃（`O`）的代號清單（排序）。來源是後端每日收盤最新交易日的代號，當天新上市櫃的可能兩邊都沒有、也可能列出快照沒有的代號；沒有這個欄位時不要自己猜。
+  - 建議顯示：`closing` 為 `true` 時，`officialClose[市場]` 為 `false` 的市場用這份快照並標「**MM/DD FinMind 收盤快照／正式收盤待更新**」，為 `true` 的市場改用 `kupei.marketLatest()`（兩個都 `true` 就整個切回 `latest`）。混合狀態用 `markets` 判斷每檔屬於哪個市場。`closing` 為 `false` 且 `stale` 為 `true`（隔天開盤前）→ 照舊用 `latest`。**不要**在 `closing` 為 `true`、`officialClose` 為 `false` 時把 `latest` 的前一交易日收盤當成今天的收盤價。
 - 快取：`Cache-Control: private, no-store`（每次都問伺服器）。計入 `/api/*` 的每分鐘 30 次：輪詢間隔不要短於 `intervalSeconds`，分頁在背景、`phase` 不是 `OPEN` 時停止輪詢。
 
 ### 帳號 `/api/auth/*`（不需要權杖）
@@ -213,29 +218,76 @@ await kupei.auth.logout()
 
 ### 新聞與報告 `/api/news`、`/api/reports/*`（2026-10-27）
 
-唯讀、寫入、登入權杖都能讀新聞與報告；送出「產生報告」請求只限**登入權杖**（唯讀、寫入權杖 403 `FORBIDDEN`）。計入每分鐘 30 次（同 `/api/market/*`）。
+唯讀、寫入、登入權杖都能讀新聞與報告；送出「產生報告」請求與報告排程只限**登入權杖**（唯讀、寫入權杖 403 `FORBIDDEN`）。計入每分鐘 30 次（同 `/api/market/*`）。
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
 | `GET` | `/api/news?q=台積電,2330&exclude=廣告&days=3` | `{ items: [{ title, url, source, publishedAt }], fetchedAt, source: "google-news-rss", stale? }`。`q` 1～5 個關鍵字（之間是 OR）、`exclude` 0～5 個排除字（**只比對標題**）、每個 1～50 字，逗號分隔；`days` 1、3 或 5（省略＝3）。不合法 400。新→舊、最多 50 則、只有 `days` 天內的；`url` 一定是 https（Google 新聞的轉址連結，打開會到原文）；`title` 已去掉結尾的「 - 來源」。伺服器同一個查詢 30 分鐘內只抓一次，瀏覽器可留 5 分鐘（`private, max-age=300`）。來源暫時抓不到時回較舊的結果並帶 `"stale": true`，完全沒有舊結果時 **502** `UPSTREAM_ERROR` |
-| `GET` | `/api/news/sources` | `{ sources: [{ id: "google-news", … }, { id: "bing-news", name: "Bing 新聞", … }] }`。後端先抓 Bing 新聞（每個關鍵字各查一次再合併），失敗才改抓 Google 新聞（Google 會擋 Cloudflare 機房 IP）；`source` 欄位目前固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
+| `GET` | `/api/news?kind=industry&q=AI,半導體,散熱&exclude=廣告&days=3` | **精準查詢・產業**（2026-10-30 起，NEWS-03／NEWS-04）。`q` **2～5 個**關鍵字（同一組），一則新聞要在來源給的**標題＋摘要**裡命中**至少 2 個不同的字**才回。回 `{ items: [{ title, url, source, media, via, publishedAt, summary, matchedKeywords }], fetchedAt, source: "news-aggregate", kind: "industry", stale?, partial? }`（見下方說明） |
+| `GET` | `/api/news?kind=stock&code=2330&name=台積電&topics=法說會,外資&exclude=廣告&days=5` | **精準查詢・個股**。`code` 4 碼（必填）、`name` 公司名稱（選填，建議帶）、`topics` **1～5 個主題詞**。一則要命中**公司名稱或代號至少一個**，**再**命中**主題詞至少一個**；公司名稱與代號不互相充當主題詞（`topics` 裡等於名稱／代號、或是它們一部分的字會被拿掉，例如名稱「台積電」時的「積電」）。回應同上，`kind: "stock"` |
+| `GET` | `/api/news/sources`、`/api/news/sources?all=1` | `{ sources: [{ id, name, url, accessMode, via? }] }`。**預設 3 個**＝後端會抓的來源：Google 新聞、Bing 新聞、科技新報（2026-10-30 起多了科技新報；前兩個 `google-news`、`bing-news` 的 `id`／`name`／`url` 不變）。**`?all=1` 回完整 14 個**（`all` 只認 `1`，其他值當預設）。`accessMode`：`aggregator_rss`（Google 新聞、Bing 新聞：後端代抓搜尋 RSS）、`official_rss`（科技新報：後端代抓官方 RSS）、`pending_official_feed`（TechOrange、INSIDE、商業周刊、數位時代：等官方 feed，**不擷取**）、`external_link`（關鍵評論網、遠見、工商時報、經濟日報、IEK、台灣產經新聞網、財訊：只列入口，**不擷取**）。`via` 只有後端會抓的三個才有（`google`／`bing`／`technews`，＝精準查詢每則的 `via`）。**注意**：`all=1` 清單裡 `external_link` 的「工商時報」「經濟日報」也是新聞結果裡常見的發布媒體名稱；要分出聚合器請看 `accessMode === 'aggregator_rss'`。舊版查詢：後端先抓 Bing 新聞（每個關鍵字各查一次再合併），失敗才改抓 Google 新聞（Google 會擋 Cloudflare 機房 IP）；`source` 欄位固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
 | `GET` | `/api/reports/<code>` | `{ reports: [{ period, rev, status, title, generatedAt, url, files }] }`（不含 `summary`）。`code` 4 碼數字。`period` 新→舊、同期 `rev` 新→舊；`status` 是 `DRAFT`／`PUBLISHED`／`FAILED`；`url` 是 https 或 `null`；`files` 是 `[{ name, url }]`（外部 https 連結，後端不存檔案） |
 | `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）與 `inputs: [{ id, name, mime, bytes, sha256, createdAt }]`（報告引用的參考檔，2026-10-28 起；沒有引用是 `[]`；下載只限上傳者本人）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
-| `POST` | `/api/reports/<code>/requests` | **登入權杖**。本文 `{ "period": "2026Q2", "trigger": "MANUAL" }` → **202** `{ id, status: "QUEUED", createdAt }`。同一期已經在排隊就回那一筆（**200**，同樣形狀）。每個帳號最多 20 筆排隊中，超過 **403** `QUOTA_EXCEEDED`（`details: { queued, maxQueued }`） |
-| `GET` | `/api/reports/<code>/requests` | **登入權杖**。`{ requests: [{ id, period, trigger, status, createdAt, updatedAt, message }] }`，只有自己的，新→舊。`status`：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，`message` 是管線留的說明（可能 `null`） |
+| `POST` | `/api/reports/<code>/requests` | **登入權杖**。本文 `{ "period": "2026Q2", "trigger": "MANUAL", "settings"?: {…} }`（`settings` 見下，2026-10-30 起）→ **202** `{ id, status: "QUEUED", createdAt, rev, settings, run }`。同一期、**同樣設定**已經在排隊就回那一筆（**200**，同樣形狀）。每個帳號最多 20 筆排隊中，超過 **403** `QUOTA_EXCEEDED`（`details: { queued, maxQueued }`）。設定格式不對、參考檔不是自己的 **400** `BAD_REQUEST`（後者 `details: { missing: [id…] }`） |
+| `GET` | `/api/reports/<code>/requests` | **登入權杖**。`{ requests: [{ id, period, trigger, status, createdAt, updatedAt, message, rev, settings, run, scheduleId }] }`，只有自己的，新→舊。`status`：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，`message` 是管線留的說明（可能 `null`）；`trigger` 是 `MANUAL` 或 `SCHEDULED`（排程建立的，`scheduleId` 是哪個排程）；2026-10-30 以前建立的請求 `rev`、`settings`、`run`、`scheduleId` 是 `null` |
+| `POST` | `/api/reports/schedules` | **登入權杖**（2026-10-30）。本文 `{ code, period, frequency, time, weekday?, date?, settings? }`（見「報告排程」）→ **201** 排程。每個帳號最多 20 個，超過 **403** `QUOTA_EXCEEDED`（`details: { schedules, maxSchedules }`） |
+| `GET` | `/api/reports/schedules` | **登入權杖**。`{ schedules: [排程] }`，只有自己的，新→舊 |
+| `GET`／`DELETE` | `/api/reports/schedules/<id>` | **登入權杖**。讀一個排程／刪除（`{ status: "ok" }`，已建立的請求不受影響）。別人的或不存在 **404** `NOT_FOUND`。排程不能改，要改就刪掉再建 |
+
+**報告設定 `settings`**（2026-10-30 起，可省略；省略時 `settings` 是 `null`）：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `keywords` | **必填**，2～10 個字串，每個去頭尾空白後 1～50 字；重複的去掉（去掉後不到 2 個也是 400） |
+| `includeNews` | 布林，省略＝`true` |
+| `focusMajors` | 關注的大項：`summary.majors[].id`（例如 `K005`）或英文代號（例如 `DAR-L`），≤ 12 個，只能英數與 `_` `.` `-`；省略＝`[]`。後端只檢查格式 |
+| `comparePrevious` | 布林，省略＝`true` |
+| `inputIds` | 參考檔 id（`kupei.reportInputs` 上傳的），≤ 20 個，**要是自己上傳到這家公司、沒刪除的**；省略＝`[]` |
+
+不認得的欄位（例如 `include_news`）400。後端補好預設值後存成**快照**，之後改設定不影響已送出的請求；回應與列表裡的 `settings` 是補好預設值的完整物件。`rev` 是後端配發的報告版號（同一家公司同一期遞增，不同帳號共用），報告產生後用 `kupei.report(code, period, rev)` 讀；`run` 是送出當下的評分批次（`manifest.run`）。
+
+**報告排程**（2026-10-30 起）：到期時後端建立一筆 `trigger: "SCHEDULED"` 的產生請求（設定照抄排程的），報告一樣由外部管線產生。
+
+| 欄位 | 說明 |
+| --- | --- |
+| `code` | 4 碼代號 |
+| `period` | 固定期別（`"2026Q2"`），或規則 `"CURRENT_QUARTER"`／`"PREVIOUS_QUARTER"`（到期那天的台灣日期換算，例如 10/30 → `2026Q4`／`2026Q3`） |
+| `frequency` | `"once"`（一次）、`"daily"`（每天）、`"weekly"`（每週） |
+| `time` | `"HH:MM"`，台灣時間 |
+| `weekday` | `weekly` 必帶：0＝週日 … 6＝週六；其他頻率不能帶 |
+| `date` | `once` 必帶：`"YYYY-MM-DD"`（台灣日期），時間要在現在之後、366 天內；其他頻率不能帶 |
+| `settings` | 同上（可省略） |
+
+回應的排程：`{ id, code, period, frequency, time, weekday, date, settings, nextDueAt, lastDueAt, lastRequestId, createdAt }`。`nextDueAt` 是下一個到期時間（ISO UTC），`null`＝不會再到期（`once` 已觸發）；`lastRequestId` 是最近一次到期建立的請求，`null`＝還沒到期過或那次沒建立。
+
+> **不是準點**：後端在固定的排程時間檢查到期（台灣平日 09:00～13:50 每 10 分鐘、每天 10:00），請求在「到期之後的第一次檢查」建立。例如週五 20:00 的排程，週六 10:00 才會建立請求。畫面上請寫「約在 HH:MM 之後排入」之類，不要寫成準點。
+> **到期但沒建立**：排隊中已滿 20 筆、同樣設定的請求還在排隊（避免管線停擺時堆積）、參考檔已被刪除、帳號停用時，這次跳過（`lastRequestId` 為 `null`），等下一個時段，不補建；好幾個時段都錯過也只建一筆。
 
 > 新聞每個查詢快取 30 分鐘。**沒命中快取的新查詢每個 IP 每分鐘最多 6 次**：超過時有舊結果就回舊的並帶 `stale: true`，沒有就回 429 `RATE_LIMITED`。不要一次打很多組關鍵字，也不要把使用者輸入的每個字元都拿去查。
+
+**精準查詢（`kind=industry`／`kind=stock`，2026-10-30 起）**——舊版（沒帶 `kind`）的行為與回應完全不變；要新規則才帶 `kind`：
+- **來源**：Bing 新聞（失敗才改 Google 新聞）＋科技新報 RSS（`https://technews.tw/feed/`，伺服器全站共用一份、15 分鐘更新）合併。只用各來源 RSS 給的標題、摘要、連結、時間，**不抓全文**。
+- **每則欄位**：`title`、`url`（原文網址、https、已去 `utm_*` 等追蹤參數；Bing 的轉址已還原，Google 的轉址能解出原文就換成原文、解不出來仍是 Google 連結）、`source`＝`media`（發布媒體，例如「經濟日報」「科技新報」）、`via`（`bing`／`google`／`technews`：從哪個來源抓到）、`publishedAt`、`summary`（來源的摘要，去 HTML、最多 200 字，可能是空字串）、`matchedKeywords`（命中的字；全形英數轉半形、小寫；個股先列公司名稱／代號，再列主題詞）。
+- **比對**：英數開頭／結尾的字要在字界（`AI` 不會命中 `said`、`2330` 不會命中 `12330`），中文照字面比對。排除字**只比對標題**，任一命中即排除。
+- **去重**：依原文網址（去追蹤參數、去 `www.`、去結尾斜線、參數順序不計）只留一則，同一篇在多個來源時留科技新報＞Bing＞Google。之後新→舊、最多 50 則。
+- **關鍵字不夠 → 400 `NOT_ENOUGH_KEYWORDS`**：產業 `q` 去重後少於 2 個（`AI,ａｉ` 算 1 個）、個股 `topics` 拿掉名稱／代號後少於 1 個。**不會退回單一關鍵字 OR**；前端請顯示「請設定至少 2 個關鍵字」之類的空狀態。其他參數錯（`kind` 不認得、`code` 不是 4 碼、產業帶 `topics`／`code`／`name`、個股帶 `q`、超過 5 個字…）是 400 `BAD_REQUEST`。
+- **`partial: true`**：Bing 與 Google 都暫時抓不到、只有科技新報的結果（伺服器不快取，稍後再查會重抓）；有舊結果時改回舊結果＋`stale: true`。
+- 每次沒命中快取時上游最多 5 次 Bing（產業 2 個字 1 次、3 個字 3 次、4～5 個字每字 1 次；個股每個主題詞 1 次）＋1 次科技新報（共用快取時 0 次），Bing 全失敗才 1 次 Google；仍計入上面的 6 次限制。
 
 **推送權杖專用**（給產生報告的管線，不是給瀏覽器用；`Authorization: Bearer <INGEST_TOKEN>`，同行情推送的那把，**不要放進前端**）：
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20 }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`）；覆寫或刪除報告後，**沒有任何報告再引用**的參考檔自動解鎖（2026-10-28 起） |
+| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20, requestId?: 請求 id }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`requestId`（2026-10-30 起，建議帶）：路徑的 code／period／rev 要等於那筆請求配發的，不符 **409** `VERSION_CONFLICT`（`details: { requestId, code, period, rev }`＝請求配發的），沒有這筆 **404**。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`）；覆寫或刪除報告後，**沒有任何報告再引用**的參考檔自動解鎖（2026-10-28 起） |
 | `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404 |
-| `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50 |
+| `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt, rev, settings, run, runHash, runHashes, scheduleId }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50。2026-10-30 起：`settings`（設定快照，沒帶是 `null`）、`run`／`runHashes`（建立當下的 `manifest.run`／`manifest.hashes`）、`runHash`（批次指紋，算法見下）、`rev`（後端配發的版號，發布時用它）都在建立時鎖定，**同一筆重取不會變**；之前建立的請求這些是 `null` |
+| `GET`／`HEAD` | `/data/manifest.json`、`/data/<run>/…` | 2026-10-30 起推送權杖也能讀評分批次（同唯讀權杖的範圍）：用請求的 `run` 讀 `/data/<run>/summary.json?v=<runHashes.summary>`、`details/<代號>.json`、`tr.json`、`valuation.json`（`runHashes` 有 `valuation` 才有）等。其他方法 403；推送權杖讀 `/api/market/*` 等仍 401 |
+| `POST` | `/api/reports/schedules/tick` | 立刻處理到期的報告排程（同後端排程做的事）→ `{ due, created }`。維運用，平常不用呼叫 |
 | `PATCH` | `/api/reports/requests/<id>` | 本文 `{ status: "RUNNING"\|"DONE"\|"FAILED", message?: ≤500 字 }` → `{ status: "ok" }`；沒有這筆 404。**狀態只能照順序改**（2026-10-28 起）：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，或 `QUEUED`→`FAILED`；`DONE`、`FAILED` 之後不能再改。不合順序（例如 `QUEUED` 直接 `DONE`）**409** `INVALID_TRANSITION`，`details: { from, to }`——管線要先 PATCH `RUNNING`。建立超過 90 天的 `DONE`／`FAILED` 會被自動清掉 |
 
-推送權杖錯或沒帶 → 401（不帶 CORS）。用唯讀、寫入、登入權杖打這四個也是 401。
+推送權杖錯或沒帶 → 401（不帶 CORS）。用唯讀、寫入、登入權杖打這些（`/data/*` 除外）也是 401。
+
+**管線的建議流程**（2026-10-30）：`GET /api/reports/requests?status=QUEUED` → 每筆 `PATCH …/requests/<id>` `RUNNING` → 檢查 `run` 不是 `null`（是的話 `FAILED`）→ 讀 `/data/<run>/…`、`/api/reports/<code>/inputs/<id>`（`settings.inputIds`）→ 產生報告 → `PUT /api/reports/<code>/<period>/<rev>`（`rev` 用請求的、本文帶 `requestId` 與 `inputs`）→ `PATCH` `DONE`（失敗 `FAILED`＋`message`）。`runHash`＝SHA-256 of `JSON.stringify([run, [[鍵, 值]…（鍵照字母排序）]])` 的 hex 前 16 位（Python：`hashlib.sha256(json.dumps([run, sorted(hashes.items())], separators=(',', ':')).encode()).hexdigest()[:16]`），可以拿目前的 manifest 算一次比對，看批次是否原地改寫過。舊批次資料夾可能被清掉：請求放太久，`/data/<run>/…` 可能 404。
 
 ### 報告參考檔 `/api/reports/<code>/inputs`（2026-10-28）
 
@@ -285,8 +337,8 @@ await kupei.auth.logout()
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
 | 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀或寫入權杖打 `/api/market/live`、唯讀權杖打 `/api/store`、唯讀或寫入權杖打報告參考檔 `/api/reports/<code>/inputs*`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
-| 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件 |
-| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }`。**報告參考檔超過 50 個或 200 MiB 時是 413**（不是 403），`details` 是 `{ files, bytes, maxFiles, maxBytes }` |
+| 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件。報告推送帶 `requestId` 時路徑的 code／period／rev 和請求配發的不一致也是這個（推送權杖，2026-10-30），`details` 是 `{ requestId, code, period, rev }` |
+| 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }`；報告排程超過 20 個（2026-10-30）`details` 是 `{ schedules, maxSchedules }`。**報告參考檔超過 50 個或 200 MiB 時是 413**（不是 403），`details` 是 `{ files, bytes, maxFiles, maxBytes }` |
 | 409 | `INPUT_LOCKED` | 報告參考檔已被報告引用，不能刪除 |
 | 409 | `INPUT_REFERENCED` | 解鎖報告參考檔時仍有報告引用它（`POST …/inputs/<id>/unlock`）；`error.details` 是 `{ reports: [{ period, rev }] }`（最多 20 筆） |
 | 400 | `CHECKSUM_MISMATCH` | 報告參考檔上傳的 `X-Content-SHA256` 和收到的內容不符；檔案沒有存，重傳即可 |
@@ -296,6 +348,7 @@ await kupei.auth.logout()
 | 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 與 `/api/reports/<code>/inputs*` 各 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 30 次）；`/api/news` 沒命中快取的新查詢 6 次。IPv6 以 /64 為一組，超過一律帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
 | 503 | `LIVE_UNAVAILABLE` | FinMind 盤中即時（`/api/market/live`）沒啟用、還沒抓到過或暫時讀不到；改用 `/api/market/intraday`（2026-10-28，K-54） |
 | 502 | `UPSTREAM_ERROR` | `/api/news` 的新聞來源暫時抓不到、伺服器也沒有舊結果；稍後再試（不要立刻重送） |
+| 400 | `NOT_ENOUGH_KEYWORDS` | `/api/news` 精準查詢（`kind=industry`／`stock`）的關鍵字不夠：產業 `q` 少於 2 個不同的字、個股 `topics` 拿掉公司名稱／代號後少於 1 個（2026-10-30）。不會退回單字 OR，請提示使用者補關鍵字 |
 | 404 | `NOT_FOUND` | 刪除不存在的文件、沒有這份報告（JSON）；`/data/*` 的檔案不存在時內文是純文字，只看狀態碼 |
 
 > 瀏覽器 console 出現 CORS 錯誤，多半是來源不在白名單（不是 `localhost`）、`/api/*` 請求沒帶 `Authorization`、送了不允許的請求標頭（預檢只允許 `Authorization`、`Content-Type`、`If-None-Match`、`X-Content-SHA256`），或網址打錯導致 Worker 沒回應。用 curl 打同一個網址可以分辨。回應沒有 `Access-Control-Expose-Headers`，所以跨來源的 JS 讀不到 `Retry-After`、`ETag` 等非基本標頭（瀏覽器自己的快取驗證不受影響）。
@@ -411,11 +464,21 @@ type HelpDoc = unknown                                   // /data/<run>/help.jso
 type Valuation = Record<string, unknown>                 // /data/<run>/valuation.json
 type NodeInfo = Record<string, Record<string, unknown>>  // /data/<run>/node_info.json：節點 id → 定義物件
 
-// GET /api/news
+// GET /api/news（舊版，沒帶 kind）
 interface NewsItem { title: string; url: string; source: string; publishedAt: string }
 interface NewsResponse { items: NewsItem[]; fetchedAt: string; source: 'google-news-rss'; stale?: true }
-// GET /api/news/sources
-interface NewsSource { id: string; name: string; url: string }
+// GET /api/news?kind=industry|stock（精準查詢，2026-10-30）
+interface MatchedNewsItem {
+  title: string; url: string; source: string; media: string
+  via: 'bing' | 'google' | 'technews'; publishedAt: string; summary: string; matchedKeywords: string[]
+}
+interface MatchedNewsResponse { items: MatchedNewsItem[]; fetchedAt: string; source: 'news-aggregate'; kind: 'industry' | 'stock'; stale?: true; partial?: true }
+// GET /api/news/sources（預設 3 個；?all=1 14 個）
+interface NewsSource {
+  id: string; name: string; url: string
+  accessMode?: 'aggregator_rss' | 'official_rss' | 'pending_official_feed' | 'external_link'
+  via?: 'bing' | 'google' | 'technews'
+}
 
 // GET /api/reports/<code>（不含 summary）、GET /api/reports/<code>/<period>/<rev>（含 summary）
 type ReportStatus = 'DRAFT' | 'PUBLISHED' | 'FAILED'
