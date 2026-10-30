@@ -781,28 +781,38 @@ const terms = (a: string[]) => a.map((s) => s.replace(/[,，]/g, ' ').trim().sli
 const mediaSeen = new Set<string>()
 
 const NEWS_LIMITS = ['TITLE_ONLY']
+/**
+ * 產業新聞（沒有 gate）走後端精準查詢 kind=industry（2026-10-30，NEWS-03／04）：Google／Bing＋科技新報、依原文網址去重，
+ * 一則要在標題＋摘要命中同組至少 2 個不同關鍵字；不足 2 個詞不送出（後端也會回 400 NOT_ENOUGH_KEYWORDS，不退回單字 OR）。
+ * 個股新聞（有 gate）仍走舊版 OR，等 NEWS-05（主題詞 1～10 個、兩條收入分支）上線才換；上線前不送超過 5 個詞。
+ */
 async function fetchNews(kw: string[], ex: string[], days: 1 | 3 | 5, gate?: { code: string }): Promise<Reply> {
   const q = terms(kw)
   if (!q.length) return { ok: false, status: 400, data: { error_code: 'NEWS_NO_KEYWORDS', message_zh: '尚未設定關鍵字' } }
+  if (!gate && q.length < 2) return { ok: false, status: 400, data: { error_code: 'NOT_ENOUGH_KEYWORDS', message_zh: '產業新聞每組至少要 2 個關鍵字' } }
   const x = terms(ex)
-  const key = `news|${q.join(',')}|${x.join(',')}|${days}`
-  const load = () => client.news({ q, ...(x.length ? { exclude: x } : {}), days })
+  const key = `news|${gate ? 's' : 'i'}|${q.join(',')}|${x.join(',')}|${days}`
+  const load = (): Promise<any> => gate ? client.news({ q, ...(x.length ? { exclude: x } : {}), days }) : client.news({ kind: 'industry', q, ...(x.length ? { exclude: x } : {}), days })
   let d: Json
   try { d = (await (gate ? gated(gate.code, 's-news', key, load) : cached5(key, load))) as unknown as Json } catch (e) { return errReply(e) }
   const off = new Set(newsSettings().disabled)
   const articles = (Array.isArray(d?.items) ? d.items : []).slice(0, 50).filter((i: any) => isObj(i) && typeof i.title === 'string' && i.title)
     .map((i: any) => {
-      const src = str(i.source, 100).trim()
+      const src = str(i.media || i.source, 100).trim()
       if (src) mediaSeen.add(src)
       return {
         title: str(i.title, 300), url: httpsUrl(i.url), source_name: src, source_id: src,
         published_at_utc: isoOrNull(i.publishedAt), timezone_basis: 'SOURCE_RFC822',
+        // 精準查詢才有：實際命中的詞、抓到的來源（聚合器或科技新報 RSS）、RSS 摘要（不是全文）
+        matched_keywords: Array.isArray(i.matchedKeywords) ? i.matchedKeywords.filter((w: unknown) => typeof w === 'string' && w).slice(0, 12).map((w: string) => w.slice(0, 50)) : [],
+        via: ['google', 'bing', 'technews'].includes(i.via) ? i.via : null,
+        summary_30: str(i.summary, 200) || null,
       }
     })
     .filter((a: Json) => !off.has(a.source_name)) // 新聞設定裡停用的媒體（依媒體名稱比對）
   return ok({
-    articles, excluded: [], generated_at: isoOrNull(d?.fetchedAt), source: str(d?.source, 40),
-    retrieval_limitations: d?.stale === true ? [...NEWS_LIMITS, 'STALE'] : NEWS_LIMITS,
+    articles, excluded: [], precise: !gate, generated_at: isoOrNull(d?.fetchedAt), source: str(d?.source, 40),
+    retrieval_limitations: [...(gate ? NEWS_LIMITS : ['RSS_METADATA_ONLY']), ...(d?.stale === true ? ['STALE'] : []), ...(d?.partial === true ? ['PARTIAL'] : [])],
   })
 }
 

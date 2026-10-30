@@ -447,7 +447,7 @@ function qRender(){
   if(QS.err){$('q-body').innerHTML='<div class="placeholder">個股問題載入失敗：'+esc(QS.err)+'</div>';return;}
   var L=QS.list||[],act=L.filter(function(q){return !q.deleted;}),del=L.filter(function(q){return q.deleted;});
   $('q-showdel').hidden=!del.length;$('q-delcount').textContent=del.length;
-  var h=PAGES?'<div class="placeholder" id="q-store">'+esc(QSTORE())+'</div><div class="placeholder">只收需要外部資訊或公司說明才能回答的事項；分數、名次、觸發等評分內容在報告 2a 追蹤。每則最多 1,000 字、每家公司最多 100 則；刪除的問題可恢復（已刪除最多保留 50 則）。</div>'
+  var h=PAGES?'<div class="placeholder" id="q-store">'+esc(QSTORE())+'</div><div class="placeholder">記錄需外部資訊或公司說明的問題；每則最多 1,000 字、每家公司最多 100 則，已刪除可恢復。</div>'
     :'<div class="placeholder">只收需要外部資訊或公司說明才能回答的事項；分數、名次、觸發等評分內容在報告 2a 追蹤。手動修改標示「人工」，AI 之後不會覆蓋；刪除的問題可恢復。</div>';
   h+=act.map(qRow).join('')||'<div class="placeholder">目前沒有問題。可手動新增。</div>';
   if(QS.showDel&&del.length)h+='<div class="placeholder" style="margin-top:6px">已刪除：</div>'+del.map(qRow).join('');
@@ -926,8 +926,8 @@ function sRender(){
       b+='<tr class="lv1">'+itemCell(n,1,key,k)+'<td class="c2">'+treeScore(n)+'</td><td class="c3 note">'+treeNote(n,1,key,C)+'</td></tr>';
       if(SP.open[key])n.c.forEach(function(m){
         var k2=key+'/'+m.id;
-        b+='<tr>'+itemCell(m,2,k2)+'<td class="c2">'+treeScore(m)+'</td><td class="c3 note">'+treeNote(m,2,k2,C)+'</td></tr>';
-        if(SP.open[k2])m.c.forEach(function(x){var k3=k2+'/'+x.id;b+='<tr>'+itemCell(x,3,k3)+'<td class="c2">'+treeScore(x)+'</td><td class="c3 note">'+treeNote(x,3,k3,C)+'</td></tr>';});
+        b+='<tr class="lv2">'+itemCell(m,2,k2)+'<td class="c2">'+treeScore(m)+'</td><td class="c3 note">'+treeNote(m,2,k2,C)+'</td></tr>';
+        if(SP.open[k2])m.c.forEach(function(x){var k3=k2+'/'+x.id;b+='<tr class="lv3">'+itemCell(x,3,k3)+'<td class="c2">'+treeScore(x)+'</td><td class="c3 note">'+treeNote(x,3,k3,C)+'</td></tr>';});
       });
     });
   }else{
@@ -1027,7 +1027,7 @@ function chipBox(arr,kind,key,max,placeholder){
 function nsRender(){
   $('ns-span').innerHTML=[1,3].map(function(v){return '<button data-nsdef="'+v+'" class="'+((NS.span||1)===v?'on':'')+'" aria-pressed="'+((NS.span||1)===v)+'">'+v+' 天</button>';}).join('');
   $('ns-groups').innerHTML=NS.groups.map(function(g,i){
-    return '<div class="kwrow"><span class="mono">'+(i+1)+'</span>'+chipBox(g.kw,'kw','g'+g.id,5,'輸入關鍵字後按 Enter')+chipBox(g.ex,'ex','g'+g.id,5,'排除字（選填）')+'<span style="display:flex;gap:6px"><button class="btn sm" data-nssave="1">儲存</button><button class="xbtn" data-nsdel="'+esc(g.id)+'" aria-label="刪除第 '+(i+1)+' 組">✕</button></span></div>';
+    return '<div class="kwrow"><span class="mono">'+(i+1)+'</span>'+chipBox(g.kw,'kw','g'+g.id,5,'輸入關鍵字後按 Enter')+chipBox(g.ex,'ex','g'+g.id,5,'排除字（選填）')+(PAGES&&g.kw.length<2?'<span class="ev" role="status" style="grid-column:1/-1;font-size:12px">這組只有 '+g.kw.length+' 個關鍵字：產業新聞要命中至少 2 個不同關鍵字，目前不會產生新聞，請再加至少 '+(2-g.kw.length)+' 個。</span>':'')+'<span style="display:flex;gap:6px"><button class="btn sm" data-nssave="1">儲存</button><button class="xbtn" data-nsdel="'+esc(g.id)+'" aria-label="刪除第 '+(i+1)+' 組">✕</button></span></div>';
   }).join('')||'<div class="placeholder" style="padding:8px 0">尚未建立關鍵字組。</div>';
   var ids=watchIds();
   $('ns-stocks').innerHTML=ids.length?ids.map(function(id){var s=stockKw(id);return '<div class="kwrow"><span class="mono">'+esc(id)+'</span>'+chipBox(s.kw,'kw','s'+id,5,'輸入關鍵字後按 Enter')+chipBox(s.ex,'ex','s'+id,5,'排除字（選填）')+'<span><button class="btn sm" data-nssave="1">儲存</button></span></div>';}).join(''):'<div class="placeholder">自選群組目前沒有公司。</div>';
@@ -1152,7 +1152,7 @@ function stRender(){
     ['行情',q.enabled?({OPEN:'交易中',DELAYED:'延遲',CLOSED:'收盤／休市'}[QT.st||q.market_status]||v(q.market_status))+'｜最後成功 '+dtTxt(q.last_success_at)+(q.last_error_at?'｜最後失敗 '+dtTxt(q.last_error_at):'')+'｜判定依據 '+v(q.calendar_basis)+(fmSrc()?'｜資料來源 FinMind':''):'未啟用'],
     ['近 20 日行情與月營收',hi.enabled?'啟用｜最後更新 '+dtTxt(hi.last_success_at):'未啟用'],
     ['全市場估價',va.enabled?'啟用｜估價基準日 '+(VAL.on?v(VAL.date||va.valuation_date):'載入中…'):'未啟用（尚無正式估價快照）'],
-    ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google／Bing 新聞（每 30 分鐘更新）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
+    ['新聞',(function(n){if(PAGES)return '依關鍵字查詢 Google／Bing 新聞；產業新聞另含科技新報 RSS（每 30 分鐘更新）';if(!n||!n.enabled)return '未啟用';var t=function(x){return x?new Date(x).toLocaleString('zh-TW',{hour12:false,timeZone:'Asia/Taipei'}):'—';};return '啟用｜來源 '+((n.source_ids||[]).join('、')||'—')+'｜文章 '+(n.article_count==null?'—':n.article_count)+' 則｜最後成功 '+t(n.last_success_at)+(n.last_error_at?'｜最後失敗 '+t(n.last_error_at)+(n.last_error_code?'（'+n.last_error_code+'）':''):'')+'｜摘要方式 '+(n.summary_mode==='RULE_BASED_METADATA_SUMMARY'?'規則式（非 AI）':v(n.summary_mode));})(STAT.news)],
     ['報告',PAGES?'規則式報告（非 AI），依請求產生（登入帳號後可送出，最多 20 筆；可上傳參考檔：PDF、TXT、MD、CSV、XLSX、PNG、JPEG，單檔 20 MiB；V1 只列參考檔索引）':STAT.reports&&STAT.reports.enabled?'啟用｜佇列 '+(STAT.reports.queue_count||0)+' 筆':(PAGES?'未提供（後端未承接）':'未啟用（主機尚未設定報告根目錄）')],
     PAGES&&!bk.enabled?null:['備份',!bk.enabled?'未設定':(bk.status==='PASS'?'正常｜最後完成 '+v(bk.completed_at):'🔴 異常｜'+v(bk.error_code))], /* Pages 沒有備份功能：不列 */
     ['資料儲存',PAGES?(window.KupeiAuth&&window.KupeiAuth.session()?'這台瀏覽器；已登入 '+window.KupeiAuth.session().username+'，自選、設定與個股問題依帳號雲端同步':'這台瀏覽器（未登入；登入後自選、設定與個股問題可跨裝置同步）'):(SRV.mode==='server'?'主機（跨裝置同步）':'這台瀏覽器（主機寫入服務未啟用）')]
@@ -1269,7 +1269,7 @@ var NEWS_ON=PAGES||SRV.mode==='server'&&!!(STAT.news&&STAT.news.enabled);
 var REP_ON=PAGES||SRV.mode==='server'&&!!(STAT.reports&&STAT.reports.enabled);
 var NEWS_SRC='來源：Google／Bing 新聞（每 30 分鐘更新）';
 NEWS_OFF=PAGES?OFFZH:(SRV.mode!=='server'?'新聞需連上主機才能顯示（目前為本機模式）。':'新聞服務尚未啟用。');
-var LIMIT_ZH={RSS_METADATA_ONLY:'僅 RSS 標題與摘要',BODY_UNAVAILABLE:'未取得新聞全文',SOURCE_DISABLED_BY_USER:'來源已停用',TITLE_ONLY:'僅標題與連結',STALE:'暫時無法更新，顯示上次擷取結果'};
+var LIMIT_ZH={RSS_METADATA_ONLY:'僅 RSS 標題與摘要',BODY_UNAVAILABLE:'未取得新聞全文',SOURCE_DISABLED_BY_USER:'來源已停用',TITLE_ONLY:'僅標題與連結',STALE:'暫時無法更新，顯示上次擷取結果',PARTIAL:'新聞聚合暫時抓不到，只有科技新報的結果'};
 var REQ_ZH={SUBMITTED:'已送出（等待人工／AI 初稿）',DRAFTING:'初稿中',REVIEWING:'審核中',RECHECKING:'覆核中',PUBLISHED:'已發布',FAILED:'失敗',CANCELLED:'已取消',QUEUED:'排隊中',RUNNING:'產生中',DONE:'已完成'};
 var REQ_ACTIVE=['SUBMITTED','DRAFTING','REVIEWING','RECHECKING','QUEUED','RUNNING'];
 /* C-07：規則式報告管線（REPORT_RULE_V1）寫回請求的 message 是代碼；契約欄位缺少時管線會直接標失敗、不發布報告，這不是使用者的操作錯誤 */
@@ -1294,15 +1294,16 @@ function cached(store,key,path,then){
 function newsErr(r){
   var code=r&&r.data&&r.data.error_code;
   if(!r||!r.status)return '新聞載入失敗（連線中斷），請稍後重新整理。';
-  return {NOT_PROVIDED:'新聞尚未提供（後端尚未開通）。',NEWS_NO_KEYWORDS:'這組尚未設定關鍵字，請到「新聞關鍵字設定」新增。',RATE_LIMITED:'請求太頻繁，請稍後再試。',NEWS_DISABLED:'新聞服務尚未啟用。',NEWS_GROUP_NOT_FOUND:'這個關鍵字組尚未存到主機，請到「新聞關鍵字設定」按儲存。',STOCK_NOT_WATCHED:'此公司不在自選群組，沒有個股新聞。',INVALID_NEWS_QUERY:'新聞日期或顯示區間不正確。',COMPANY_NOT_FOUND:'找不到公司。'}[code]||('新聞載入失敗：'+errMsg(r));
+  return {NOT_PROVIDED:'新聞尚未提供（後端尚未開通）。',NEWS_NO_KEYWORDS:'這組尚未設定關鍵字，請到「新聞關鍵字設定」新增。',NOT_ENOUGH_KEYWORDS:'產業新聞每組至少要 2 個關鍵字，目前不足，不會產生新聞；請到「新聞關鍵字設定」補上。',RATE_LIMITED:'請求太頻繁，請稍後再試。',NEWS_DISABLED:'新聞服務尚未啟用。',NEWS_GROUP_NOT_FOUND:'這個關鍵字組尚未存到主機，請到「新聞關鍵字設定」按儲存。',STOCK_NOT_WATCHED:'此公司不在自選群組，沒有個股新聞。',INVALID_NEWS_QUERY:'新聞日期或顯示區間不正確。',COMPANY_NOT_FOUND:'找不到公司。'}[code]||('新聞載入失敗：'+errMsg(r));
 }
+var VIA_ZH={google:'Google 新聞',bing:'Bing 新聞',technews:'科技新報 RSS'};
 function limitTags(arr){return (arr||[]).map(function(x){return '<span class="tag" style="background:var(--line);color:var(--text2)">'+esc(LIMIT_ZH[x]||x)+'</span>';}).join(' ');}
 function artHtml(a,compact){
   var tb=a.timezone_basis&&a.timezone_basis!=='SOURCE_RFC822'?'（時間依據：'+(a.timezone_basis==='ASSUMED_ASIA_TAIPEI'?'推定台灣時間':'擷取時間')+'）':'';
   return '<div class="nart" style="border-top:1px solid var(--line);padding:6px 0;display:flex;flex-direction:column;gap:2px;min-width:0">'+
     '<div style="display:flex;gap:6px;align-items:baseline;min-width:0">'+(a.citation?'<span class="cite2">〔'+esc(a.citation)+'〕</span>':'')+
     (safeUrl(a.url)!=='#'?'<a href="'+esc(safeUrl(a.url))+'" target="_blank" rel="noopener noreferrer" style="min-width:0;overflow:hidden;text-overflow:ellipsis'+(compact?';white-space:nowrap':'')+'">'+esc(a.title)+'</a>':'<span title="連結不是 https，不提供開啟" style="min-width:0;overflow:hidden;text-overflow:ellipsis'+(compact?';white-space:nowrap':'')+'">'+esc(a.title)+'</span>')+'</div>'+
-    '<div class="sub">'+esc(a.source_name||a.source_id||'')+'｜'+esc(tpTime(a.published_at_taipei||a.published_at_utc))+esc(tb)+(a.matched_keywords&&a.matched_keywords.length&&!compact?'｜符合：'+esc(a.matched_keywords.join('、')):'')+'</div>'+
+    '<div class="sub">'+esc(a.source_name||a.source_id||'')+(a.via?'（經'+esc(VIA_ZH[a.via]||a.via)+'）':'')+'｜'+esc(tpTime(a.published_at_taipei||a.published_at_utc))+esc(tb)+(a.matched_keywords&&a.matched_keywords.length?'｜命中：'+esc(a.matched_keywords.join('、')):'')+'</div>'+
     (compact?(a.summary_15?'<div style="font-size:12px;color:var(--text2)">'+esc(a.summary_15)+'</div>':''):(a.summary_30?'<div style="font-size:12px;color:var(--text2)">'+esc(a.summary_30)+'</div>':''))+'</div>';
 }
 function indNews(g,then){return cached(NC,'i|'+g.id+'|'+ymdOff(0)+'|'+nSpan(),'/news/industry?group='+encodeURIComponent(g.id)+'&date='+ymdOff(0)+'&span='+nSpan(),then);}
@@ -1310,7 +1311,7 @@ function newsList(c,n,compact){
   if(c.loading)return '<span class="placeholder">新聞載入中…</span>';
   if(!c.r.ok)return '<span class="placeholder">'+esc(newsErr(c.r))+'</span>';
   var d=c.r.data||{},arts=d.articles||[];
-  if(!arts.length)return '<span class="placeholder">此區間沒有符合關鍵字的新聞。</span> '+limitTags(d.retrieval_limitations);
+  if(!arts.length)return '<span class="placeholder">'+(d.precise?'此區間沒有同時命中至少 2 個關鍵字的新聞。':'此區間沒有符合關鍵字的新聞。')+'</span> '+limitTags(d.retrieval_limitations);
   return arts.slice(0,n).map(function(a){return artHtml(a,compact);}).join('')+(arts.length>n?'<span class="sub">另有 '+(arts.length-n)+' 則，見新聞頁</span>':'');
 }
 var _hMNews=hMNews;
@@ -1341,7 +1342,7 @@ var _nRender=nRender;
 nRender=function(kw){
   _nRender(kw);
   if(!NEWS_ON){$('n-banner2').textContent=NEWS_OFF;$('n-main').innerHTML='<div class="placeholder">'+esc(NEWS_OFF)+'</div>';return;}
-  if(PAGES){nsrcLoad(function(){if(curPage==='news')nRender(NP.kw);});$('n-banner2').textContent=NSRC.r&&!NSRC.r.ok&&NSRC.r.data&&NSRC.r.data.error_code==='NOT_PROVIDED'?'新聞尚未提供（後端尚未開通）。':NEWS_SRC+'；只列標題與連結，不保存新聞全文';}
+  if(PAGES){nsrcLoad(function(){if(curPage==='news')nRender(NP.kw);});$('n-banner2').textContent=NSRC.r&&!NSRC.r.ok&&NSRC.r.data&&NSRC.r.data.error_code==='NOT_PROVIDED'?'新聞尚未提供（後端尚未開通）。':(NP.kw.charAt(0)==='s'?NEWS_SRC:'來源：Google／Bing 新聞聚合與科技新報 RSS，同一篇依原文網址去重（每 30 分鐘更新）')+'；只列標題、RSS 摘要與連結，不保存新聞全文';}
   else $('n-banner2').textContent='規則式整理（不是 AI 摘要）；只保存標題、RSS 摘要與連結，不保存新聞全文';
   var isStock=NP.kw.charAt(0)==='s',date=ymdOff(+$('n-date').value||0),c,title;
   if(isStock){
@@ -1358,7 +1359,7 @@ nRender=function(kw){
   var d=c.r.data||{},arts=d.articles||[],ex=d.excluded||[];
   h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0">'+limitTags(d.retrieval_limitations)+'</div>';
   if(d.summary)h+='<div class="report" style="border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0"><span class="sub">規則式彙整（依發布時間列出前 5 則標題，非 AI 摘要）</span><p>'+esc(d.summary).replace(/〔(S\d+)〕/g,'<span class="cite">〔$1〕</span>')+'</p></div>';
-  h+=arts.length?arts.map(function(a){return artHtml(a,false);}).join(''):'<div class="placeholder">此區間沒有符合關鍵字的新聞。</div>';
+  h+=arts.length?arts.map(function(a){return artHtml(a,false);}).join(''):'<div class="placeholder">'+(d.precise?'此區間沒有同時命中至少 2 個關鍵字的新聞。':'此區間沒有符合關鍵字的新聞。')+'</div>';
   if(ex.length)h+='<details style="margin-top:8px"><summary class="sub">已排除 '+ex.length+' 則（標題含排除字）</summary>'+ex.map(function(a){return '<div class="sub" style="padding:2px 0">'+esc(a.title)+'｜排除字：'+esc((a.matched_excludes||[]).join('、'))+'</div>';}).join('')+'</details>';
   h+='<div class="sub" style="margin-top:6px">產生時間 '+esc(tpTime(d.generated_at))+'</div>';
   $('n-main').innerHTML=h;

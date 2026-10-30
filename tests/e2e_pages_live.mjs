@@ -166,7 +166,7 @@ await check('產業新聞：關鍵字與排除字來自本機設定、days=span�
   const links = await P.$$eval('#n-main a[target=_blank]', (x) => x.map((a) => a.getAttribute('href')))
   must(links.length === 1 && links[0] === 'https://news.example.com/a', '連結：' + JSON.stringify(links))
   must(main.includes('非 https 的新聞') && main.includes('javascript 連結'), '非 https 的新聞仍要列出標題')
-  const bn = await P.innerText('#n-banner2'); must(/Google／Bing 新聞（每 30 分鐘更新）/.test(bn) && !/尚未提供/.test(bn), '標示：' + bn)
+  const bn = await P.innerText('#n-banner2'); must(/Google／Bing 新聞聚合與科技新報 RSS/.test(bn) && !/尚未提供/.test(bn), '標示：' + bn)
   must(!/尚未提供/.test(await P.innerText('#pg-news')), '新聞頁還有「尚未提供」')
   await shot(P, 'news_industry')
   return links.length + ' 個 https 連結'

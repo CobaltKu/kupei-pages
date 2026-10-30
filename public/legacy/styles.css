@@ -150,6 +150,15 @@ table.tree{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
 .caret{display:inline-block;width:12px;color:var(--faint);font-size:10px;margin-top:2px}
 .lv1 td{background:#191D21}
 .lv1 .en1{font-weight:700}
+/* 展開後的中項／小項用不同冷色底區分（低對比，文字對比不變）；大項未展開時外觀不變 */
+.lv2 td{background:#1B232B}
+.lv3 td{background:#141B22}
+.lv2:hover td{background:#202A33}
+.lv3:hover td{background:#18212A}
+.lv2:focus-within td{background:#202A33}
+.lv3:focus-within td{background:#18212A}
+.lv2 td:first-child{box-shadow:inset 3px 0 0 #2C3A47}
+.lv3 td:first-child{box-shadow:inset 3px 0 0 #222E39}
 .zh{color:var(--muted);font-size:11px;margin-left:6px}
 .per{color:var(--faint);font-size:10px;margin-left:6px;font-family:"IBM Plex Mono",monospace}
 .note{color:var(--text2);line-height:1.55}

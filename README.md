@@ -47,6 +47,8 @@ UI 不重算任何分數、名次或 Gate；後端沒有交付的資料顯示「
 - `tests/e2e_pages_r8.mjs`：正式 r8 擴充欄位（對線上 Workers 資料，不寫入任何資料；要 `KUPEI_TEST_SESSION`，沒設就略過），10 項：第二階段處置與複核原因、否決／複核來源、未評估公司、同業名次、估價（有中心值、只有中心值、不適用）、109 個節點的目的／定義、首頁 1,979 列的處置分布、說明頁 109 項、狀態頁估價啟用。
 - `tests/e2e_pages_inputs.mjs`：報告參考檔 UI（後端 `/inputs` 用假的回應），20 項：列出（只讀自己的、不含上傳者）、上傳（Content-Type 依副檔名、帶 SHA-256、原始位元組）、下載、刪除確認、locked 不可刪、前端先擋（副檔名、超過 20 MiB）、UNSUPPORTED_TYPE／TOO_LARGE／QUOTA_EXCEEDED／CHECKSUM_MISMATCH／429／500／404／INPUT_LOCKED 訊息、401 回登入畫面、換帳號不殘留、惡意檔名跳脫、手機寬度。
 - `tests/e2e_pages_report_rule.mjs`：規則式報告的畫面語意（後端 `/api/reports/*` 用假的回應），10 項：報告全文頁標明「不是 AI 撰寫」（人工報告不加）、markdown 表格以純文字顯示、請求狀態 QUEUED／RUNNING／DONE／FAILED 與管線代碼轉成可讀說明、報告設定說明「關鍵字、納入新聞、前期比較、重點大項與參考檔選擇要等 REPORT-01 才會帶入」與「排程尚未啟用」、參考檔 V1 只列索引、狀態頁、手機寬度。
+- `tests/e2e_pages_tree_style.mjs`：個股頁評分樹與個股問題卡（評分用 fixture），8 項（桌機＋手機）：收合時沒有 `lv2`／`lv3` 列且大項底色不變、展開後中項／小項各有 class 與不同底色、再收合子列消失、個股問題小字說明精簡且不重複登入狀態。
+- `tests/e2e_pages_news_precise.mjs`：產業新聞精準查詢（NEWS-03／04，後端 `/api/news` 用假的回應），11 項（桌機＋手機）：2 個詞的組別送 `kind=industry`、顯示命中詞與實際媒體／抓取來源、命中詞裡的標籤不執行；只有 1 個詞不送請求並提示；設定頁提示；後端 400 `NOT_ENOUGH_KEYWORDS` 不退回舊版 OR；空狀態與 `partial` 說明；個股新聞仍走舊版查詢且詞數 ≤5（等 NEWS-05）。
 - `tests/e2e_pages_mobile.mjs`：手機預檢（iPhone SE／14／Pro Max 寬度，模擬 iOS Safari），33 項：登入畫面與 9 個頁面不橫向捲動、無 JS 錯誤、輸入框字級 ≥16px（避免 iOS 點進去自動放大），帳號視窗（改密碼展開）不超出畫面。實機 iPhone 仍須人工看。
 - `tests/e2e_pages_account.mjs`：用假的帳號端點測沒有註冊（登入畫面與帳號視窗都沒有建立帳號、不打 `/api/auth/config`、`/register`）與改密碼，4 項；不建立真實帳號。
 - `tests/e2e_pages_account2.mjs`：用假的帳號與雲端文件端點測「忘記密碼」（登入畫面連結切換、欄位驗證、重設碼錯 401 的訊息、成功後已登入且 `kupei:session` 換新並提示其他裝置已登出）與「匯入舊的寫入權杖資料」（權杖錯、沒有資料可匯入、摘要與確認後寫進帳號雲端、本機換新且 `kupei3_*_prev` 有備份、409 重讀版本重試一次、額度已滿不重試、權杖不進網址與 storage），13 項；不建立真實帳號。`SHOTS=<資料夾>` 另存截圖。
