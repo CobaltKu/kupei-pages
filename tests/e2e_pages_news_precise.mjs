@@ -31,7 +31,7 @@ async function open(hash, { groups, stock = {} }, vp = { width: 1280, height: 90
     const json = (status, body) => route.fulfill({ status, headers: CORS, body: JSON.stringify(body) })
     if (path.startsWith('/api/store')) return json(404, { error: { code: 'NOT_FOUND', message: 'nf' } })
     if (path.startsWith('/api/reports')) return json(200, path.endsWith('/requests') ? { requests: [] } : { reports: [] })
-    if (path === '/api/news/sources') return json(200, { sources: [{ id: 'google-news', name: 'Google 新聞', url: 'https://news.google.com/' }, { id: 'technews', name: '科技新報', url: 'https://technews.tw/' }] })
+    if (path === '/api/news/sources') return json(200, { sources: [{ id: 'google-news', name: 'Google 新聞', url: 'https://news.google.com/', accessMode: 'aggregator_rss', via: 'google' }, { id: 'bing-news', name: 'Bing 新聞', url: 'https://www.bing.com/news', accessMode: 'aggregator_rss', via: 'bing' }, { id: 'technews', name: '科技新報', url: 'https://technews.tw/', accessMode: 'official_rss', via: 'technews' }] })
     if (path === '/api/news') {
       M.calls.push(Object.fromEntries(u.searchParams))
       if (M.status !== 200) return json(M.status, { error: { code: M.errorCode, message: 'x' } })
@@ -89,6 +89,14 @@ for (const [label, vp] of [['桌機', { width: 1280, height: 900 }], ['手機（
     const t = await text(p, '#n-main'); must(/沒有同時命中至少 2 個關鍵字的新聞/.test(t) && /只有科技新報的結果/.test(t), t.slice(0, 200)); await p.context().close()
   })
 }
+await check('來源設定：科技新報是可停用的媒體；只有 Google／Bing 列為不能停用的聚合來源（2026-10-31）', async () => {
+  reset(); const p = await open('#/news-settings', { groups: G2 })
+  await p.waitForFunction(() => document.querySelectorAll('#ns-src input[data-nsrc]').length > 0, null, { timeout: 15000 })
+  const boxes = await p.$$eval('#ns-src input[data-nsrc]', (x) => x.map((e) => e.getAttribute('data-nsrc')))
+  must(boxes.includes('科技新報'), '科技新報不在可停用清單：' + JSON.stringify(boxes))
+  must(!boxes.includes('Google 新聞') && !boxes.includes('Bing 新聞'), '聚合來源不該能停用：' + JSON.stringify(boxes))
+  const t = await text(p, '#ns-src'); must(/Google 新聞/.test(t) && /Bing 新聞/.test(t), '聚合來源沒列出：' + t.slice(0, 200)); await p.context().close()
+})
 await check('個股新聞：仍走舊版查詢（沒有 kind），詞數不超過 5，不宣稱雙詞規則', async () => {
   reset(); const p = await open('#/stock/2330/home', { groups: G2, stock: { 2330: { kw: ['台積電', '2330', '法說會', '外資', '先進製程', '多餘第六個'], ex: [] } } })
   await p.waitForFunction(() => /個股新聞/.test(document.getElementById('s-news')?.innerText || ''), null, { timeout: 15000 }); await p.waitForTimeout(1500)

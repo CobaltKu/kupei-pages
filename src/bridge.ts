@@ -816,10 +816,12 @@ async function fetchNews(kw: string[], ex: string[], days: 1 | 3 | 5, gate?: { c
   })
 }
 
-/** 聚合器清單（/api/news/sources）：只當說明列出、不能停用。一次開頁面讀一次（失敗下次再讀） */
+/** 聚合器清單（/api/news/sources）：只當說明列出、不能停用。一次開頁面讀一次（失敗下次再讀）。
+ * 只算 accessMode＝aggregator_rss（Google、Bing）；科技新報是實際媒體（official_rss），要留在可停用清單（2026-10-31）。
+ * 舊後端沒有 accessMode＝全部當聚合器 */
 let aggP: Promise<Json[]> | null = null
 function aggregators(): Promise<Json[]> {
-  aggP ??= client.newsSources().then((list) => (Array.isArray(list) ? list : []).filter((s) => isObj(s) && typeof s.name === 'string' && s.name).slice(0, 20)
+  aggP ??= client.newsSources().then((list) => (Array.isArray(list) ? list : []).filter((s) => isObj(s) && typeof s.name === 'string' && s.name && (s.accessMode === undefined || s.accessMode === 'aggregator_rss')).slice(0, 20)
     .map((s) => ({ id: str(s.id, 64), name: str(s.name, 100), url: httpsUrl(s.url) })))
   aggP.catch(() => (aggP = null))
   return aggP
