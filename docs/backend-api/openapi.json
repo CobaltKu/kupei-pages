@@ -1562,7 +1562,7 @@
             "items": {
               "type": "string"
             },
-            "description": "命中的關鍵字（NFKC＋小寫）；個股先列公司名稱／代號，再列主題詞"
+            "description": "實際命中的關鍵字（NFKC＋小寫）；個股先列公司名稱／代號（B 分支沒有），再列主題詞"
           }
         }
       },
@@ -3173,7 +3173,7 @@
     },
     "/api/news": {
       "get": {
-        "summary": "新聞（後端代抓；唯讀、寫入、登入權杖）。沒帶 kind＝舊版（Google／Bing，q 之間 OR）；kind=industry|stock＝精準查詢（Google／Bing＋科技新報，NEWS-03／NEWS-04，2026-10-30）",
+        "summary": "新聞（後端代抓；唯讀、寫入、登入權杖）。沒帶 kind＝舊版（Google／Bing，q 之間 OR）；kind=industry|stock＝精準查詢（Google／Bing＋科技新報，NEWS-03／NEWS-04，2026-10-30；個股 NEWS-05，2026-10-31）",
         "parameters": [
           {
             "name": "kind",
@@ -3186,7 +3186,7 @@
                 "stock"
               ]
             },
-            "description": "省略＝舊版查詢（行為與回應不變）。industry：q 2～5 個，一則要在標題＋摘要命中至少 2 個不同的字。stock：code（＋name）＋topics，一則要命中公司名稱或代號至少一個、再命中主題詞至少一個（名稱與代號不算主題詞）"
+            "description": "省略＝舊版查詢（行為與回應不變）。industry：q 2～5 個，一則要在標題＋摘要命中至少 2 個不同的字。stock：code（＋name）＋topics，一則符合任一即收（NEWS-05，2026-10-31）：A. 命中公司名稱或代號至少一個、再命中主題詞至少 1 個；B. 沒命中公司名稱與代號，但命中至少 2 個不同的主題詞（名稱與代號不算主題詞）"
           },
           {
             "name": "q",
@@ -3224,7 +3224,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "kind=stock 必填：1～5 個主題詞，逗號分隔，每個 1～50 字。等於或包含於公司名稱／代號的字會被拿掉；剩不到 1 個 → 400 NOT_ENOUGH_KEYWORDS"
+            "description": "kind=stock 必填：1～10 個主題詞（2026-10-31 起；code／name 不占名額），逗號分隔，每個 1～50 字；超過 10 個 → 400 BAD_REQUEST。NFKC＋小寫去重後計算；等於或包含於公司名稱／代號的字會被拿掉；剩不到 1 個 → 400 NOT_ENOUGH_KEYWORDS（只剩 1 個時只有 A 分支能命中）"
           },
           {
             "name": "exclude",
@@ -3269,7 +3269,7 @@
             }
           },
           "400": {
-            "description": "參數不對（BAD_REQUEST），或精準查詢的關鍵字不夠（NOT_ENOUGH_KEYWORDS：產業 q 少於 2 個不同的字、個股 topics 去掉名稱／代號後少於 1 個；不會退回單字 OR）",
+            "description": "參數不對（BAD_REQUEST），或精準查詢的關鍵字不夠（NOT_ENOUGH_KEYWORDS：產業 q 少於 2 個不同的字、個股 topics 去掉名稱／代號後少於 1 個；不會退回單字 OR；個股 topics 超過 10 個是 BAD_REQUEST）",
             "content": {
               "application/json": {
                 "schema": {

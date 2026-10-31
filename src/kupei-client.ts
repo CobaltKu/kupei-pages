@@ -47,7 +47,7 @@
 //   await kupei.auth.logout()
 //   const { items, stale } = await kupei.news({ q: ['台積電', '2330'], exclude: ['廣告'], days: 3 })   // 舊版：q 之間 OR
 //   const ind = await kupei.news({ kind: 'industry', q: ['AI', '半導體', '散熱'], exclude: ['廣告'] })    // 精準：至少命中 2 個字
-//   const stk = await kupei.news({ kind: 'stock', code: '2330', name: '台積電', topics: ['法說會', '外資'] }) // 精準：公司＋主題詞
+//   const stk = await kupei.news({ kind: 'stock', code: '2330', name: '台積電', topics: ['法說會', '外資'] }) // 精準：公司＋主題詞，或 2 個主題詞（topics 最多 10 個）
 //   const reports = await kupei.reports('2330')           // 列表（不含 summary）；kupei.report('2330', '2026Q2', 1) 含 summary
 //   await kupei.requestReport('2330', '2026Q2', { keywords: ['台積電', '2330'] })   // 登入後才能送；設定可省略；進度看 kupei.reportRequests('2330')
 //   await kupei.reportSchedules.create({ code: '2330', period: 'PREVIOUS_QUARTER', frequency: 'weekly', weekday: 1, time: '09:00' })
@@ -374,7 +374,8 @@ export function createKupeiClient(cfg: KupeiConfig) {
    * 新聞（後端代抓，只有標題、來源、時間、原文連結；精準查詢另有摘要。不抓全文）。瀏覽器快取 5 分鐘（伺服器同一查詢 30 分鐘只抓一次）。
    * - 舊版 news({ q, exclude, days })：q 1～5 個關鍵字（之間 OR）、只有 Google／Bing。回 NewsResponse。
    * - 精準 news({ kind: 'industry', q, … })：q 2～5 個，一則要命中至少 2 個不同的字。
-   *   news({ kind: 'stock', code, name, topics, … })：要命中公司名稱或代號＋至少 1 個主題詞（名稱與代號不算主題詞）。
+   *   news({ kind: 'stock', code, name, topics, … })：topics 1～10 個（2026-10-31 起，NEWS-05），符合任一即收：
+   *     A. 命中公司名稱或代號＋至少 1 個主題詞；B. 沒命中公司名稱與代號，但命中至少 2 個不同的主題詞（名稱與代號不算主題詞）。
    *   兩者都是 Google／Bing＋科技新報合併、依原文網址去重，每則有 media、via、matchedKeywords。回 MatchedNewsResponse。
    *   關鍵字不夠 → 400 NOT_ENOUGH_KEYWORDS（不會退回單字 OR）。
    * exclude 0～5 個排除字（只比對標題）；每個字 1～50 字、不能含逗號；days 1、3、5（省略＝3）。

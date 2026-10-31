@@ -404,10 +404,13 @@ export interface NewsQuery {
 }
 
 /**
- * kupei.news() 的精準查詢（2026-10-30，NEWS-03／NEWS-04）：Google／Bing＋科技新報三來源合併、依原文網址去重。
+ * kupei.news() 的精準查詢（2026-10-30，NEWS-03／NEWS-04；個股規則 2026-10-31 改為 NEWS-05）：Google／Bing＋科技新報三來源合併、依原文網址去重。
  * - 產業 kind: 'industry'：q 2～5 個關鍵字，一則要在標題＋摘要命中**至少 2 個不同的字**。
- * - 個股 kind: 'stock'：要命中公司名稱（name）或代號（code）至少一個，**再**命中 topics 至少一個；名稱與代號不算主題詞。
- * 排除字只比對標題。關鍵字不夠（產業去重後 < 2、個股主題詞去掉名稱／代號後 < 1）→ 400 NOT_ENOUGH_KEYWORDS（不會退回單字 OR）。
+ * - 個股 kind: 'stock'：topics 1～10 個（code／name 另外傳、不占名額），標題＋摘要符合下列**任一**就收：
+ *   A. 命中公司名稱（name）或代號（code）至少一個，**且**命中 topics 至少 1 個；
+ *   B. 沒命中公司名稱與代號，但命中 topics 至少 **2 個不同的**（只有 1 個主題詞時 B 不會成立）。
+ *   名稱與代號不算主題詞；一個主題詞只出現在另一個更長的主題詞裡（例如 ai 只出現在「ai伺服器」）不另外算。
+ * 排除字只比對標題、比 A／B 優先。關鍵字不夠（產業去重後 < 2、個股主題詞去掉名稱／代號後 < 1）→ 400 NOT_ENOUGH_KEYWORDS（不會退回單字 OR）。
  * 每個字 1～50 字、不能含逗號；days 省略＝3。
  */
 export interface IndustryNewsQuery {
@@ -422,6 +425,7 @@ export interface StockNewsQuery {
   code: string
   /** 公司名稱（建議帶；沒帶就只認代號） */
   name?: string
+  /** 1～10 個主題詞（2026-10-31 起；之前 1～5）。超過 10 → 400 BAD_REQUEST */
   topics: string[]
   exclude?: string[]
   days?: 1 | 3 | 5
@@ -442,7 +446,7 @@ export interface MatchedNewsItem {
   publishedAt: string
   /** 來源 RSS 的摘要（去 HTML、最多 200 字；可能是空字串）。不是全文 */
   summary: string
-  /** 命中的關鍵字（全形英數轉半形、小寫）；個股先列公司名稱／代號，再列主題詞 */
+  /** 命中的關鍵字（全形英數轉半形、小寫）；個股先列公司名稱／代號（B 分支沒有），再列主題詞 */
   matchedKeywords: string[]
 }
 
