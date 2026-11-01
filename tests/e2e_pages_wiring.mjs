@@ -73,7 +73,7 @@ async function live(route) {
 
 const SEED = {
   kupei3_watch: JSON.stringify({ groups: [{ id: 1, name: '自選1', ids: ['2330', '2317', '2454', '2308', '2303'] }], cur: 1 }),
-  kupei3_news: JSON.stringify({ span: 1, groups: [{ id: 1, kw: ['半導體', 'AI'], ex: [] }], stock: {} }),
+  kupei3_news: JSON.stringify({ span: 1, groups: [{ id: 1, kw: ['半導體', 'AI'], ex: [] }], stock: { 2330: { kw: ['法說會'], ex: [] }, 2317: { kw: ['法說會'], ex: [] }, 2454: { kw: ['法說會'], ex: [] }, 2308: { kw: ['法說會'], ex: [] }, 2303: { kw: ['法說會'], ex: [] } } }),
 }
 const LOGIN = { 'kupei:session': JSON.stringify({ token: 'kps_mock_1', username: 't-user', expiresAt: new Date(Date.now() + 864e5).toISOString() }) }
 async function open(hash = '', seed = SEED, wait = true) {

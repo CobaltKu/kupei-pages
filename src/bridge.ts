@@ -767,12 +767,12 @@ function newsSettings(): { span: number; groups: { id: string; kw: string[]; ex:
   const groups = (Array.isArray(o.groups) ? o.groups : []).filter((g: any) => g && typeof g === 'object' && (typeof g.id === 'number' || typeof g.id === 'string'))
     .map((g: any) => ({ id: String(g.id), kw: list(g.kw, 5), ex: list(g.ex, 5) }))
   const stock: Record<string, { kw: string[]; ex: string[] }> = {}
-  if (o.stock && typeof o.stock === 'object') for (const [id, v] of Object.entries(o.stock as Json)) if (/^\d{4}$/.test(id) && v && typeof v === 'object') stock[id] = { kw: list(v.kw, 5), ex: list(v.ex, 5) }
+  if (o.stock && typeof o.stock === 'object') for (const [id, v] of Object.entries(o.stock as Json)) if (/^\d{4}$/.test(id) && v && typeof v === 'object') stock[id] = { kw: list(v.kw, 12), ex: list(v.ex, 5) }
   // 停用的媒體名稱：與新聞的 source（最多 100 字）比對，同 app.js strList(raw.disabled, 200, 100)
   return { span: o.span === 3 ? 3 : 1, groups, stock, disabled: list(o.disabled, 200, 100) }
 }
 /** 後端規則：q 1～5 個、exclude 0～5 個、每個 1～50 字，以逗號分隔（關鍵字裡的逗號換成空白） */
-const terms = (a: string[]) => a.map((s) => s.replace(/[,，]/g, ' ').trim().slice(0, 50)).filter(Boolean).slice(0, 5)
+const terms = (a: string[], max = 5) => a.map((s) => s.replace(/[,，]/g, ' ').trim().slice(0, 50)).filter(Boolean).slice(0, max)
 
 /**
  * 新聞結果裡出現過的發布媒體（item.source，例如「經濟日報」）。/api/news/sources 只回聚合器（Google／Bing 新聞），
@@ -780,21 +780,23 @@ const terms = (a: string[]) => a.map((s) => s.replace(/[,，]/g, ' ').trim().sli
  */
 const mediaSeen = new Set<string>()
 
-const NEWS_LIMITS = ['TITLE_ONLY']
 /**
  * 產業新聞（沒有 gate）走後端精準查詢 kind=industry（2026-10-30，NEWS-03／04）：Google／Bing＋科技新報、依原文網址去重，
  * 一則要在標題＋摘要命中同組至少 2 個不同關鍵字；不足 2 個詞不送出（後端也會回 400 NOT_ENOUGH_KEYWORDS，不退回單字 OR）。
- * 個股新聞（有 gate）仍走舊版 OR，等 NEWS-05（主題詞 1～10 個、兩條收入分支）上線才換；上線前不送超過 5 個詞。
+ * 個股新聞（有 gate）走 kind=stock（2026-10-31，NEWS-05）：公司名稱、代號分開傳（不占名額），主題詞 1～10 個；標題＋摘要要命中
+ * 「名稱或代號＋至少 1 個主題詞」，或「沒命中名稱代號但至少 2 個不同主題詞」。主題詞等於或包含於名稱／代號的拿掉（後端也會拿掉），去掉後沒有 → 不送出。
  */
-async function fetchNews(kw: string[], ex: string[], days: 1 | 3 | 5, gate?: { code: string }): Promise<Reply> {
-  const q = terms(kw)
+async function fetchNews(kw: string[], ex: string[], days: 1 | 3 | 5, gate?: { code: string; name: string }): Promise<Reply> {
+  const ident = gate ? [gate.code, gate.name].map((s) => s.toLowerCase()) : []
+  const q = gate ? terms(kw, 40).filter((t) => !ident.some((i) => i.includes(t.toLowerCase()))).filter((t, i, a) => a.findIndex((u) => u.toLowerCase() === t.toLowerCase()) === i).slice(0, 10) : terms(kw)
+  if (gate && !q.length) return { ok: false, status: 400, data: { error_code: 'NOT_ENOUGH_KEYWORDS', scope: 'stock', message_zh: '個股新聞至少要 1 個主題詞（公司名稱與代號不算）' } }
   if (!q.length) return { ok: false, status: 400, data: { error_code: 'NEWS_NO_KEYWORDS', message_zh: '尚未設定關鍵字' } }
   if (!gate && q.length < 2) return { ok: false, status: 400, data: { error_code: 'NOT_ENOUGH_KEYWORDS', message_zh: '產業新聞每組至少要 2 個關鍵字' } }
   const x = terms(ex)
-  const key = `news|${gate ? 's' : 'i'}|${q.join(',')}|${x.join(',')}|${days}`
-  const load = (): Promise<any> => gate ? client.news({ q, ...(x.length ? { exclude: x } : {}), days }) : client.news({ kind: 'industry', q, ...(x.length ? { exclude: x } : {}), days })
+  const key = `news|${gate ? 's' + gate.code : 'i'}|${q.join(',')}|${x.join(',')}|${days}`
+  const load = (): Promise<any> => gate ? client.news({ kind: 'stock', code: gate.code, name: gate.name, topics: q, ...(x.length ? { exclude: x } : {}), days }) : client.news({ kind: 'industry', q, ...(x.length ? { exclude: x } : {}), days })
   let d: Json
-  try { d = (await (gate ? gated(gate.code, 's-news', key, load) : cached5(key, load))) as unknown as Json } catch (e) { return errReply(e) }
+  try { d = (await (gate ? gated(gate.code, 's-news', key, load) : cached5(key, load))) as unknown as Json } catch (e) { const r = errReply(e); if (gate && isObj(r.data)) (r.data as Json).scope = 'stock'; return r }
   const off = new Set(newsSettings().disabled)
   const articles = (Array.isArray(d?.items) ? d.items : []).slice(0, 50).filter((i: any) => isObj(i) && typeof i.title === 'string' && i.title)
     .map((i: any) => {
@@ -811,8 +813,8 @@ async function fetchNews(kw: string[], ex: string[], days: 1 | 3 | 5, gate?: { c
     })
     .filter((a: Json) => !off.has(a.source_name)) // 新聞設定裡停用的媒體（依媒體名稱比對）
   return ok({
-    articles, excluded: [], precise: !gate, generated_at: isoOrNull(d?.fetchedAt), source: str(d?.source, 40),
-    retrieval_limitations: [...(gate ? NEWS_LIMITS : ['RSS_METADATA_ONLY']), ...(d?.stale === true ? ['STALE'] : []), ...(d?.partial === true ? ['PARTIAL'] : [])],
+    articles, excluded: [], precise: true, scope: gate ? 'stock' : 'industry', generated_at: isoOrNull(d?.fetchedAt), source: str(d?.source, 40),
+    retrieval_limitations: [...['RSS_METADATA_ONLY'], ...(d?.stale === true ? ['STALE'] : []), ...(d?.partial === true ? ['PARTIAL'] : [])],
   })
 }
 
@@ -866,7 +868,15 @@ function adaptRequest(q: any): Json | null {
   return {
     id: reqId(q.id), period: str(q.period, 32), trigger: str(q.trigger, 20), status: REQ_ST.includes(q.status) ? q.status : 'UNKNOWN',
     created_at: isoOrNull(q.createdAt), updated_at: isoOrNull(q.updatedAt), message: str(q.message, 500),
+    rev: typeof q.rev === 'number' ? q.rev : null, schedule_id: typeof q.scheduleId === 'number' ? q.scheduleId : null,
+    settings: pickSettings(q.settings),
   }
+}
+/** 設定快照（REPORT-01）：只放行白名單欄位與型別，其餘丟掉；沒有快照（舊請求）是 null */
+function pickSettings(x: any): Json | null {
+  if (!isObj(x)) return null
+  const strs = (a: unknown, n: number) => (Array.isArray(a) ? a.filter((s) => typeof s === 'string').slice(0, n).map((s: string) => s.slice(0, 50)) : [])
+  return { keywords: strs(x.keywords, 10), include_news: x.includeNews !== false, focus_majors: strs(x.focusMajors, 12), compare_previous: x.comparePrevious !== false, input_count: Array.isArray(x.inputIds) ? Math.min(x.inputIds.length, 20) : 0 }
 }
 const userKey = () => client.getSession()?.username ?? ''
 async function reportList(code: string): Promise<Reply> {
@@ -903,7 +913,14 @@ async function requestReport(code: string, body: any): Promise<Reply> {
   if (!period) return { ok: false, status: 400, data: { error_code: 'REPORT_PERIOD_UNAVAILABLE' } }
   try {
     postStatus.delete(code)
-    const r = await client.requestReport(code, period)
+    const st = isObj(body?.settings) ? body.settings : null
+    const settings = st ? {
+      keywords: (Array.isArray(st.keywords) ? st.keywords : []).filter((s: unknown) => typeof s === 'string').map((s: string) => s.replace(/[,，]/g, ' ').trim().slice(0, 50)).filter(Boolean).slice(0, 10),
+      includeNews: st.includeNews !== false, comparePrevious: st.comparePrevious !== false,
+      focusMajors: (Array.isArray(st.focusMajors) ? st.focusMajors : []).filter((s: unknown) => typeof s === 'string').slice(0, 12),
+      inputIds: (Array.isArray(st.inputIds) ? st.inputIds : []).filter((s: unknown) => typeof s === 'string').slice(0, 20),
+    } : undefined
+    const r = await client.requestReport(code, period, settings)
     forget5(`reqs|${code}|`) // 自己的請求變了：下次重讀
     // 202＝新排隊、200＝同一期已在排隊（回那一筆）：狀態由 wrapFetch 記下
     return { ok: true, status: postStatus.get(code) ?? 202, data: adaptRequest({ ...r, period: (r as Json)?.period ?? period }) }
@@ -1100,7 +1117,7 @@ async function req(method: string, path: string, body?: unknown, headers?: Recor
       if (!name) return { ok: false, status: 404, data: { error_code: 'COMPANY_NOT_FOUND' } }
       const s = newsSettings().stock[id]
       // 沒設定過 → 預設「公司名稱、代號」（與 app.js stockKw 的預設相同）；設過就用設定的關鍵字與排除字
-      return await fetchNews(s && s.kw.length ? s.kw : [name, id], s ? s.ex : [], 5, { code: id }) // 個股頁上延遲載入
+      return await fetchNews(s ? s.kw : [], s ? s.ex : [], 5, { code: id, name }) // 個股頁上延遲載入；沒設定過＝沒有主題詞（名稱與代號自動帶入）
     }
     // 新聞來源：目前新聞結果中出現過的媒體（可停用）＋聚合器（只列出，不能停用）
     if (m === 'GET' && p === '/news/sources') return await newsSourcesReply()
@@ -1162,6 +1179,22 @@ const inputs = {
   upload: (code: string, file: File) => inputReply(async () => pickInput(await client.reportInputs.upload(code, file))),
   download: (code: string, id: string) => inputReply(() => client.reportInputs.download(code, id)),
   remove: (code: string, id: string) => inputReply(() => client.reportInputs.remove(code, id)),
+}
+
+/**
+ * 報告排程（REPORT-01，2026-10-30）：只限登入，只看得到、刪除自己的。到期後約在後端下一次檢查時排入請求（不是準點）。
+ * 錯誤同 KupeiInputs 轉成 { ok:false, status, data:{ error_code } }；畫面只拿白名單欄位。
+ */
+const pickSchedule = (x: any): Json => ({
+  id: typeof x.id === 'number' ? x.id : 0, code: str(x.code, 8), period: str(x.period, 32), frequency: str(x.frequency, 10), time: str(x.time, 5),
+  weekday: typeof x.weekday === 'number' ? x.weekday : null, date: typeof x.date === 'string' ? x.date.slice(0, 10) : null,
+  settings: pickSettings(x.settings), next_due_at: isoOrNull(x.nextDueAt), last_due_at: isoOrNull(x.lastDueAt),
+  last_request_id: typeof x.lastRequestId === 'number' ? x.lastRequestId : null, created_at: isoOrNull(x.createdAt),
+})
+const schedules = {
+  list: () => inputReply(async () => (await client.reportSchedules.list()).filter(isObj).slice(0, 20).map(pickSchedule)),
+  create: (input: any) => inputReply(async () => pickSchedule(await client.reportSchedules.create(input))),
+  remove: (id: number) => inputReply(() => client.reportSchedules.remove(id)),
 }
 
 const api = {
@@ -1774,6 +1807,7 @@ async function startApp() {
   document.documentElement.classList.remove('kp-locked')
   ;(window as any).KupeiAPI = api
   ;(window as any).KupeiInputs = inputs
+  ;(window as any).KupeiSchedules = schedules
   // 先把雲端資料合併進本機（最多等 4 秒），UI 才讀 localStorage
   if (canSync()) {
     const pull = pullAll()

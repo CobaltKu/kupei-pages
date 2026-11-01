@@ -76,11 +76,11 @@ for (const [status, message, re, label] of [
     await p.context().close()
   })
 }
-await check('報告設定：說明設定項目與排程目前不會生效、報告為規則式、參考檔只列索引', async () => {
+await check('報告設定：設定會鎖成快照、排程約在之後排入（非準點）、報告為規則式、參考檔只列索引', async () => {
   M.requests = []; const p = await open('#/report-settings'); await p.waitForSelector('#rs-panel', { timeout: 15000 }); await p.waitForTimeout(800)
   const t = await text(p, '#rs-panel')
-  must(/只送出公司與期別/.test(t) && /REPORT-01/.test(t) && /不是 AI 撰寫/.test(t), '設定未生效說明：' + t.slice(0, 220))
-  must(/排程時間（尚未啟用/.test(t) && /不會自動產生/.test(t), '排程說明')
+  must(/鎖成快照/.test(t) && /不是 AI 撰寫/.test(t) && !/REPORT-01|只送出公司與期別|要等後端/.test(t), '設定說明：' + t.slice(0, 220))
+  must(/約在/.test(t) && /不是準點/.test(t) && !/尚未啟用|只保存設定/.test(t), "排程說明")
   must(/只列出檔名與雜湊，不會讀取檔案內容/.test(t), '參考檔說明'); await p.context().close()
 })
 await check('狀態頁：報告列寫明規則式（非 AI）與參考檔 V1 只列索引', async () => {

@@ -97,12 +97,56 @@ await check('來源設定：科技新報是可停用的媒體；只有 Google／
   must(!boxes.includes('Google 新聞') && !boxes.includes('Bing 新聞'), '聚合來源不該能停用：' + JSON.stringify(boxes))
   const t = await text(p, '#ns-src'); must(/Google 新聞/.test(t) && /Bing 新聞/.test(t), '聚合來源沒列出：' + t.slice(0, 200)); await p.context().close()
 })
-await check('個股新聞：仍走舊版查詢（沒有 kind），詞數不超過 5，不宣稱雙詞規則', async () => {
-  reset(); const p = await open('#/stock/2330/home', { groups: G2, stock: { 2330: { kw: ['台積電', '2330', '法說會', '外資', '先進製程', '多餘第六個'], ex: [] } } })
-  await p.waitForFunction(() => /個股新聞/.test(document.getElementById('s-news')?.innerText || ''), null, { timeout: 15000 }); await p.waitForTimeout(1500)
-  const c = M.calls.filter((q) => !q.kind); must(c.length >= 1, '沒有舊版查詢：' + JSON.stringify(M.calls))
-  must(c.every((q) => q.q.split(',').length <= 5), '個股詞數超過 5：' + JSON.stringify(c))
-  must(!M.calls.some((q) => q.kind === 'stock' || q.topics), '新契約上線前不得送 kind=stock／topics'); await p.context().close()
+const S1 = (kw, ex = []) => ({ 2330: { kw, ex } })
+const A_ITEM = { title: '台積電法說會釋出展望', url: 'https://news.example.com/s1', source: '經濟日報', media: '經濟日報', via: 'google', publishedAt: '2026-10-31T01:00:00Z', summary: '', matchedKeywords: ['台積電', '法說會'] }
+const B_ITEM = { title: '外資看好先進製程', url: 'https://technews.tw/s2', source: '科技新報', media: '科技新報', via: 'technews', publishedAt: '2026-10-31T00:00:00Z', summary: '', matchedKeywords: ['法說會', '外資'] }
+for (const [label, vp] of [['桌機', { width: 1280, height: 900 }], ['手機（iPhone 14）', { width: 390, height: 844 }]]) {
+  await check(`${label}：個股新聞送 kind=stock，名稱／代號分開傳，主題詞去掉名稱代號與包含於名稱代號的詞，排除字與 days=5`, async () => {
+    reset({ items: [A_ITEM, B_ITEM] }); const p = await open('#/news/s2330', { groups: G2, stock: S1(['台積電', '2330', '台積', '法說會', 'AI', 'AI伺服器'], ['謠言']) }, vp)
+    const c = M.calls.filter((q) => q.kind === 'stock'); must(c.length >= 1, '沒有 kind=stock 請求：' + JSON.stringify(M.calls))
+    must(c[0].code === '2330' && c[0].name === '台積電' && c[0].topics === '法說會,AI,AI伺服器' && c[0].exclude === '謠言' && c[0].days === '5' && !c[0].q, '參數：' + JSON.stringify(c[0]))
+    must(!M.calls.some((q) => !q.kind), '個股新聞不該再送舊版 OR 查詢：' + JSON.stringify(M.calls)); await p.context().close()
+  })
+  await check(`${label}：兩條收入分支都顯示命中詞（名稱＋主題詞；或 2 個主題詞），顯示實際媒體與抓取來源`, async () => {
+    reset({ items: [A_ITEM, B_ITEM] }); const p = await open('#/news/s2330', { groups: G2, stock: S1(['台積電', '2330', '法說會', '外資']) }, vp)
+    const t = await text(p, '#n-main'); must(/命中：台積電、法說會/.test(t) && /命中：法說會、外資/.test(t), '命中詞：' + t.slice(0, 300))
+    must(/經濟日報（經Google 新聞）/.test(t) && /科技新報（經科技新報 RSS）/.test(t), '媒體與來源：' + t.slice(0, 300))
+    must(/2330 台積電｜法說會、外資/.test(t) && !/2330 台積電｜台積電/.test(t), '標題列只列主題詞：' + t.slice(0, 120))
+    must(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '不該橫向捲動'); await p.context().close()
+  })
+  await check(`${label}：沒有主題詞（只有名稱、代號）→ 不送請求並提示；設定頁同步提示`, async () => {
+    reset(); const p = await open('#/news/s2330', { groups: G2, stock: S1(['台積電', '2330']) }, vp)
+    must(M.calls.filter((q) => q.kind === 'stock').length === 0, '不該送請求：' + JSON.stringify(M.calls))
+    must(/至少要 1 個主題詞/.test(await text(p, '#n-main')), '新聞頁：' + (await text(p, '#n-main')).slice(0, 160))
+    await p.goto(BASE + '#/news-settings'); await p.waitForTimeout(1000)
+    const warn = await p.$$eval('#ns-stocks [role=status]', (x) => x.map((e) => e.innerText)); must(warn.length === 1 && /還沒有主題詞/.test(warn[0]), '設定頁：' + JSON.stringify(warn)); await p.context().close()
+  })
+  await check(`${label}：後端回 NOT_ENOUGH_KEYWORDS／沒有符合收入條件的結果 → 對應說明，不退回舊版 OR`, async () => {
+    reset({ status: 400, errorCode: 'NOT_ENOUGH_KEYWORDS' }); let p = await open('#/news/s2330', { groups: G2, stock: S1(['法說會']) }, vp)
+    must(/至少要 1 個主題詞/.test(await text(p, '#n-main')), '400：' + (await text(p, '#n-main')).slice(0, 160)); await p.context().close()
+    reset({ items: [] }); p = await open('#/news/s2330', { groups: G2, stock: S1(['法說會']) }, vp)
+    const t = await text(p, '#n-main'); must(/沒有符合收入條件的新聞/.test(t) && /至少 2 個不同主題詞/.test(t), '空狀態：' + t.slice(0, 200))
+    must(M.calls.every((q) => q.kind), '不該送舊版：' + JSON.stringify(M.calls)); await p.context().close()
+  })
+}
+await check('設定頁：個股主題詞最多 10 個（名稱、代號不占名額）；送出最多 10 個', async () => {
+  const ten = ['詞一', '詞二', '詞三', '詞四', '詞五', '詞六', '詞七', '詞八', '詞九', '詞十']
+  reset({ items: [A_ITEM] }); const p = await open('#/news-settings', { groups: G2, stock: S1(['台積電', '2330', ...ten]) })
+  const row = await p.$eval('#ns-stocks .kwrow', (e) => ({ chips: e.querySelectorAll('.chips:first-of-type .chip').length, full: /已達 12 個/.test(e.innerText) })); must(row.chips === 12 && row.full, '10 個主題詞＋名稱代號應已滿：' + JSON.stringify(row))
+  must((await p.$$('#ns-stocks .kwrow [data-chipadd^="kw|"]')).length === 0, '已滿不該再有輸入框')
+  await p.click('#ns-stocks .kwrow .chip:nth-of-type(3) button'); await p.waitForTimeout(300)
+  must((await p.$$('#ns-stocks .kwrow [data-chipadd^="kw|"]')).length === 1, '刪一個後可再加')
+  await p.goto(BASE + '#/news/s2330'); await p.waitForTimeout(1200)
+  const c = M.calls.filter((q) => q.kind === 'stock'); must(c.length >= 1 && c[c.length - 1].topics.split(',').length === 9, '送出：' + JSON.stringify(c.map((q) => q.topics))); await p.context().close()
+})
+await check('個股頁：新聞卡寫主題詞、不重複寫名稱代號；科技新報可停用、Google／Bing 只列出', async () => {
+  reset({ items: [A_ITEM, B_ITEM] }); const p = await open('#/stock/2330/home', { groups: G2, stock: S1(['台積電', '2330', '法說會', '外資']) })
+  await p.waitForFunction(() => /命中/.test(document.getElementById('s-news')?.innerText || ''), null, { timeout: 15000 })
+  const t = await text(p, '#s-news'); must(/主題詞：法說會、外資/.test(t) && !/關鍵字：/.test(t), '卡片：' + t.slice(0, 160))
+  await p.goto(BASE + '#/news-settings'); await p.waitForTimeout(1500)
+  const boxes = await p.$$eval('#ns-src input[data-nsrc]', (x) => x.map((e) => e.closest('label').innerText.trim()))
+  must(boxes.some((n) => n.includes('科技新報')) && !boxes.some((n) => /Google|Bing/.test(n)), '可停用清單：' + JSON.stringify(boxes))
+  await p.context().close()
 })
 await b.close()
 for (const e of [...new Set(errs)]) results.push(['FAIL', '瀏覽器錯誤', e])

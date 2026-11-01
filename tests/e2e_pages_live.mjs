@@ -66,7 +66,7 @@ async function mockApi(route) {
 
 const SEED = {
   kupei3_watch: JSON.stringify({ groups: [{ id: 1, name: '自選1', ids: ['2330', '2317'] }], cur: 1 }),
-  kupei3_news: JSON.stringify({ span: 1, groups: [{ id: 1, kw: ['半導體', 'AI'], ex: ['廣告'] }], stock: { 2317: { kw: ['鴻海 電動車'], ex: ['謠言'] } } }),
+  kupei3_news: JSON.stringify({ span: 1, groups: [{ id: 1, kw: ['半導體', 'AI'], ex: ['廣告'] }], stock: { 2330: { kw: ['法說會'], ex: [] }, 2317: { kw: ['鴻海 電動車'], ex: ['謠言'] } } }),
 }
 async function open(hash = '', seed = SEED, clock = false) {
   const ctx = await b.newContext({ viewport: { width: 1280, height: 900 } })
@@ -178,17 +178,17 @@ await check('產業新聞 span=3 → days=3；stale 顯示「暫時無法更新�
   must(/暫時無法更新/.test(await P.innerText('#n-main')), '沒有 stale 標示')
   M.news.stale = false
 })
-await check('個股新聞：預設「公司名稱,代號」days=5；有設定時用設定的關鍵字與排除字', async () => {
+await check('個股新聞：kind=stock、名稱代號分開傳、days=5；有設定時用設定的主題詞與排除字', async () => {
   M.calls.length = 0
   await go(P, '#/news/s2330', 1500)
   const q1 = calls(/^\/api\/news$/).map((x) => new URLSearchParams(x.qs))
-  must(q1.some((q) => q.get('q') === '台積電,2330' && q.get('days') === '5' && !q.get('exclude')), '2330 請求：' + q1.map((q) => q.toString()).join(' | '))
+  must(q1.some((q) => q.get('kind') === 'stock' && q.get('code') === '2330' && q.get('name') === '台積電' && q.get('topics') === '法說會' && q.get('days') === '5' && !q.get('exclude') && !q.get('q')), '2330 請求：' + q1.map((q) => q.toString()).join(' | '))
   await noInject(P)
   await shot(P, 'news_stock')
   M.calls.length = 0
   await go(P, '#/stock/2317/home', 2000)
   const q2 = calls(/^\/api\/news$/).map((x) => new URLSearchParams(x.qs))
-  must(q2.some((q) => q.get('q') === '鴻海 電動車' && q.get('exclude') === '謠言' && q.get('days') === '5'), '2317 請求：' + q2.map((q) => q.toString()).join(' | '))
+  must(q2.some((q) => q.get('kind') === 'stock' && q.get('topics') === '鴻海 電動車' && q.get('exclude') === '謠言' && q.get('days') === '5'), '2317 請求：' + q2.map((q) => q.toString()).join(' | '))
   const sn = await P.innerText('#s-news'); must(sn.includes('台積電 法說會'), '個股頁新聞卡：' + sn.slice(0, 80))
   await noInject(P)
   await shot(P, 'news_stock_card', '#s-news')

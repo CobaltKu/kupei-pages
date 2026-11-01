@@ -97,14 +97,14 @@ function cleanNS(raw){
   var ns={span:1,groups:[],stock:{}};if(!isObj(raw))return ns;
   if(raw.span===1||raw.span===3)ns.span=raw.span;
   var gids={};(Array.isArray(raw.groups)?raw.groups:[]).forEach(function(g){if(!isObj(g)||!isGid(g.id)||gids[g.id])return;gids[g.id]=1;var k=cleanKw(g,5);ns.groups.push({id:g.id,kw:k.kw,ex:k.ex});});
-  if(isObj(raw.stock))Object.keys(raw.stock).forEach(function(id){if(isSid(id)&&isObj(raw.stock[id]))ns.stock[id]=cleanKw(raw.stock[id],5);});
+  if(isObj(raw.stock))Object.keys(raw.stock).forEach(function(id){if(isSid(id)&&isObj(raw.stock[id]))ns.stock[id]=cleanKw(raw.stock[id],12);});
   if(raw.disabled!=null)ns.disabled=strList(raw.disabled,200,100);
   return ns;
 }
 function cleanRS(raw){
   var rs={},fids=MJ.map(function(m){return m.id;});if(!isObj(raw))return rs;
   Object.keys(raw).forEach(function(id){var s=raw[id];if(!isSid(id)||!isObj(s))return;
-    rs[id]={kw:strList(s.kw,10),time:typeof s.time==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s.time)?s.time:'',news:s.news!==false,focus:strList(s.focus,fids.length,50).filter(function(f){return fids.indexOf(f)>=0;}),cmp:s.cmp!==false};
+    rs[id]={kw:strList(s.kw,10),time:typeof s.time==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s.time)?s.time:'',news:s.news!==false,focus:strList(s.focus,fids.length,50).filter(function(f){return fids.indexOf(f)>=0;}),cmp:s.cmp!==false,inputs:strList(s.inputs,20,64),freq:['once','daily','weekly'].indexOf(s.freq)>=0?s.freq:'once',wd:(typeof s.wd==='number'&&s.wd>=0&&s.wd<=6&&s.wd%1===0)?s.wd:1,tm:typeof s.tm==='string'&&/^\d{2}:\d{2}$/.test(s.tm)?s.tm:'09:00',per:s.per==='CURRENT_QUARTER'?'CURRENT_QUARTER':'PREVIOUS_QUARTER'};
     if(typeof s.status==='string')rs[id].status=s.status.slice(0,40);});
   return rs;
 }
@@ -989,7 +989,7 @@ document.addEventListener('click',function(e){
 function sNews(id){
   var inW=!!groupOf(id);
   $('s-news').innerHTML='<div style="display:flex;align-items:center;gap:10px"><h2>個股新聞</h2><span class="grow"></span></div>'+
-    (!inW?'<div class="placeholder">未追蹤：此公司不在自選群組，沒有個股新聞設定。加入自選後以「公司名稱、代號」為關鍵字。</div>'
+    (!inW?'<div class="placeholder">未追蹤：此公司不在自選群組，沒有個股新聞設定。加入自選後，以公司名稱、代號加上你設定的主題詞篩選。</div>'
       :'<div class="placeholder">'+NEWS_OFF+'關鍵字：'+esc(stockKw(id).kw.join('、')||'載入中')+'；近 5 日。</div>');
 }
 function srcList(){
@@ -1030,20 +1030,24 @@ function nsRender(){
     return '<div class="kwrow"><span class="mono">'+(i+1)+'</span>'+chipBox(g.kw,'kw','g'+g.id,5,'輸入關鍵字後按 Enter')+chipBox(g.ex,'ex','g'+g.id,5,'排除字（選填）')+(PAGES&&g.kw.length<2?'<span class="ev" role="status" style="grid-column:1/-1;font-size:12px">這組只有 '+g.kw.length+' 個關鍵字：產業新聞要命中至少 2 個不同關鍵字，目前不會產生新聞，請再加至少 '+(2-g.kw.length)+' 個。</span>':'')+'<span style="display:flex;gap:6px"><button class="btn sm" data-nssave="1">儲存</button><button class="xbtn" data-nsdel="'+esc(g.id)+'" aria-label="刪除第 '+(i+1)+' 組">✕</button></span></div>';
   }).join('')||'<div class="placeholder" style="padding:8px 0">尚未建立關鍵字組。</div>';
   var ids=watchIds();
-  $('ns-stocks').innerHTML=ids.length?ids.map(function(id){var s=stockKw(id);return '<div class="kwrow"><span class="mono">'+esc(id)+'</span>'+chipBox(s.kw,'kw','s'+id,5,'輸入關鍵字後按 Enter')+chipBox(s.ex,'ex','s'+id,5,'排除字（選填）')+'<span><button class="btn sm" data-nssave="1">儲存</button></span></div>';}).join(''):'<div class="placeholder">自選群組目前沒有公司。</div>';
+  $('ns-stocks').innerHTML=ids.length?ids.map(function(id){var s=stockKw(id);return '<div class="kwrow"><span class="mono">'+esc(id)+'</span>'+chipBox(s.kw,'kw','s'+id,stockCap(id,s.kw),'輸入主題詞後按 Enter')+chipBox(s.ex,'ex','s'+id,5,'排除字（選填）')+(PAGES&&!s.loading&&!topicsOf(id).length?'<span class="ev" role="status" style="grid-column:1/-1;font-size:12px">這家公司還沒有主題詞：公司名稱與代號會自動帶入但不算主題詞，至少要 1 個主題詞才會產生個股新聞。</span>':'')+'<span><button class="btn sm" data-nssave="1">儲存</button></span></div>';}).join(''):'<div class="placeholder">自選群組目前沒有公司。</div>';
   $('ns-src').innerHTML='<div class="placeholder">新聞來源待核准（白名單由後端提供，核准後這裡只能停用）。</div>';
 }
+/* 個股主題詞最多 10 個；公司名稱與代號（自動帶入）不占名額，所以清單裡有幾個就多放幾格 */
+function topicsOf(id){var r=BYID[id],s=stockKw(id);return (s.kw||[]).filter(function(k){return !(r&&(k===r.name||k===r.id));});}
+function topicsText(id){var s=stockKw(id);if(s.loading)return '載入中';var t=topicsOf(id);return t.length?t.join('、'):'（尚未設定，請到「新聞關鍵字設定」新增）';}
+function stockCap(id,arr){var r=BYID[id],n=0;(arr||[]).forEach(function(k){if(r&&(k===r.name||k===r.id))n++;});return 10+n;}
 function chipTarget(key){if(key.charAt(0)==='g')return NS.groups.filter(function(g){return 'g'+g.id===key;})[0];return stockKw(key.slice(1));}
 document.addEventListener('keydown',function(e){
   var t=e.target;if(!t.dataset||!t.dataset.chipadd||e.key!=='Enter')return;
   var p=t.dataset.chipadd.split('|'),obj=chipTarget(p[1]),v=t.value.trim();if(!v||!obj)return;
-  var arr=obj[p[0]],mx=(p[1].charAt(0)==='r'&&p[0]==='kw')?10:5;if(arr.indexOf(v)<0&&arr.length<mx)arr.push(v);saveNS();nsRender();
+  var arr=obj[p[0]],mx=(p[1].charAt(0)==='r'&&p[0]==='kw')?10:(p[1].charAt(0)==='s'&&p[0]==='kw')?stockCap(p[1].slice(1),arr):5;if(arr.indexOf(v)<0&&arr.length<mx)arr.push(v);saveNS();nsRender();
   var again=document.querySelector('[data-chipadd="'+p[0]+'|'+p[1]+'"]');if(again)again.focus();
 });
 
 /* ================= REPORT SETTINGS ================= */
 var RP={id:null};
-function rsGet(id){if(!RS[id])RS[id]={kw:stockKw(id).kw.slice(0,5),time:'',news:true,focus:[],cmp:true};return RS[id];}
+function rsGet(id){if(!RS[id])RS[id]={kw:PAGES?[BYID[id].name,id].concat(topicsOf(id)).slice(0,10):stockKw(id).kw.slice(0,5),time:'',news:true,focus:[],cmp:true,inputs:[],freq:'once',wd:1,tm:'09:00',per:'PREVIOUS_QUARTER'};return RS[id];}
 /* V6.2：排程日期改為月曆選取（Demo_issue V6 3-1） */
 var CAL={y:null,m:null};
 function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
@@ -1063,32 +1067,112 @@ document.addEventListener('click',function(e){
   if(t.dataset.calnav){CAL.m+=+t.dataset.calnav;if(CAL.m<0){CAL.m=11;CAL.y--;}if(CAL.m>11){CAL.m=0;CAL.y++;}rsRender();return;}
   var s=rsGet(RP.id),tm=s.time?s.time.slice(11,16):'08:00';s.time=t.dataset.calpick===(s.time||'').slice(0,10)?'':t.dataset.calpick+'T'+tm;saveRS();rsRender();
 });
+/* Pages 報告排程（REPORT-01）：用目前的報告設定建立，後端存成排程，到期後約在下一次檢查時排入請求（不是準點）；建立後不能改，要改就刪掉重建 */
+var SCH_FREQ={once:'一次',daily:'每天',weekly:'每週'},SCH_PER={PREVIOUS_QUARTER:'上一季',CURRENT_QUARTER:'當季'},WK='日一二三四五六';
+var SCH={who:null,loading:false,list:null,err:null,busy:false};
+function schErr(r){
+  var c=r&&r.data&&r.data.error_code;
+  if(!r||!r.status)return '連線中斷，請稍後再試。';
+  if(r.status===401)return '登入已過期，請重新登入。';
+  if(r.status===429)return '請求太頻繁，請稍後再試。';
+  if(c==='QUOTA_EXCEEDED')return '排程已達上限（每人最多 20 個），請先刪除不需要的排程。';
+  if(c==='BAD_REQUEST')return '排程格式不合法（一次排程的日期時間要在現在之後、366 天內；關鍵字 2～10 個；參考檔必須是自己上傳且未刪除的檔案）。';
+  if(r.status===404)return '找不到這個排程（可能已被刪除）。';
+  return '操作失敗（'+r.status+'）。';
+}
+function schLoad(force){
+  var A=window.KupeiAuth,who=A&&A.loggedIn&&A.loggedIn()&&A.session&&A.session()?A.session().username:'';
+  if(SCH.who!==who){SCH={who:who,loading:false,list:null,err:null,busy:false};force=true;}
+  if(!who||!window.KupeiSchedules)return SCH;
+  if((force||!SCH.list&&!SCH.err)&&!SCH.loading){
+    SCH.loading=true;var me=SCH;
+    window.KupeiSchedules.list().then(function(r){if(SCH!==me)return;me.loading=false;if(r.ok){me.list=r.data||[];me.err=null;}else me.err=r;if(curPage==='report-settings')rsRender();},function(){if(SCH!==me)return;me.loading=false;me.err={status:0};if(curPage==='report-settings')rsRender();});
+  }
+  return SCH;
+}
+function schText(x){
+  var w=x.frequency==='weekly'&&x.weekday!=null?'週'+WK.charAt(x.weekday)+' ':'';
+  return (x.frequency==='once'&&x.date?esc(x.date.replace(/-/g,'/'))+' ':(SCH_FREQ[x.frequency]||esc(x.frequency))+' '+w)+esc(x.time)+'（台灣時間）｜'+esc(SCH_PER[x.period]||x.period);
+}
+function schedPages(s,sd,st,topt){
+  var A=window.KupeiAuth,login=!!(A&&A.loggedIn&&A.loggedIn()),sc=schLoad(false),once=s.freq==='once',tm=s.tm||'09:00',t2='';
+  for(var h2=0;h2<24;h2++)for(var m2=0;m2<60;m2+=30){var v2=String(h2).padStart(2,'0')+':'+(m2?'30':'00');t2+='<option value="'+v2+'"'+(v2===tm?' selected':'')+'>'+v2+'</option>';}
+  var h='<div class="field" id="rs-sched"><span class="k" style="font-size:12px;color:var(--muted)">報告排程（選填；時間為台灣時間，到期後<b>約在</b>後端下一次檢查時排入請求，不是準點；後端平日 09:00–13:50 約每 10 分鐘、每天 10:00 另檢查一次）</span>';
+  h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="sr" for="rs-per">報告期別</label><select class="inp" id="rs-per"><option value="PREVIOUS_QUARTER"'+(s.per==='PREVIOUS_QUARTER'?' selected':'')+'>上一季</option><option value="CURRENT_QUARTER"'+(s.per==='CURRENT_QUARTER'?' selected':'')+'>當季</option></select>'+
+    '<label class="sr" for="rs-freq">頻率</label><select class="inp" id="rs-freq"><option value="once"'+(once?' selected':'')+'>一次</option><option value="daily"'+(s.freq==='daily'?' selected':'')+'>每天</option><option value="weekly"'+(s.freq==='weekly'?' selected':'')+'>每週</option></select>';
+  if(s.freq==='weekly')h+='<label class="sr" for="rs-wd">星期</label><select class="inp" id="rs-wd">'+[1,2,3,4,5,6,0].map(function(d){return '<option value="'+d+'"'+(s.wd===d?' selected':'')+'>週'+WK.charAt(d)+'</option>';}).join('')+'</select>';
+  if(!once)h+='<label class="sr" for="rs-tm2">時間</label><select class="inp" id="rs-tm2">'+t2+'</select>';
+  h+='</div>';
+  if(once)h+='<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+calHtml(sd)+'<div style="display:flex;flex-direction:column;gap:8px"><span style="font-size:12px;color:var(--text2)">'+(sd?'已選 '+esc(sd.replace(/-/g,'/'))+'（週'+WK.charAt(new Date(sd+'T00:00').getDay())+'）':'尚未選日期')+'</span><label class="sr" for="rs-tm">時間</label><select class="inp" id="rs-tm"'+(sd?'':' disabled')+'>'+topt+'</select>'+(s.time?'<button class="btn sm" data-rsclear="1" style="align-self:flex-start">清除日期</button>':'')+'</div></div>';
+  h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn sm" data-schadd="1"'+(sc.busy?' disabled':'')+'>'+(sc.busy?'建立中…':login?'建立排程':'建立排程（需登入）')+'</button><span class="sub">用目前的報告設定建立；建立後不能修改，要改請刪除再建。移出自選不會自動暫停排程，請自行刪除。</span></div>';
+  var L='';
+  if(!login)L='<div class="placeholder">登入帳號後可建立與管理排程。</div>';
+  else if(sc.loading&&!sc.list)L='<div class="placeholder">排程載入中…</div>';
+  else if(sc.err)L='<div class="placeholder">'+esc(schErr(sc.err))+' <button class="btn sm" data-schretry="1">重試</button></div>';
+  else{var mine=(sc.list||[]).filter(function(x){return x.code===RP.id;});
+    L=mine.length?mine.map(function(x){
+      var kws=x.settings?x.settings.keywords.length+' 個關鍵字':'沿用預設';
+      return '<div class="sch-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:4px 0"><span>'+schText(x)+'</span><span class="grow"></span><span class="sub">'+kws+'｜'+(x.next_due_at?'下次約 '+esc(tpTime(x.next_due_at))+' 之後排入':'不會再到期')+(x.last_due_at?'｜最近到期 '+esc(tpTime(x.last_due_at))+(x.last_request_id?'（已建立請求 #'+esc(x.last_request_id)+'）':'（當次未建立請求：排隊已滿、同設定已在排隊或參考檔已刪除）'):'')+'</span><button class="btn sm" data-schdel="'+esc(x.id)+'" aria-label="刪除排程">刪除</button></div>';
+    }).join(''):'<div class="placeholder">這家公司尚無排程。</div>';}
+  return h+'<div id="rs-schlist">'+L+'</div></div>';
+}
+function schBind(s){
+  var map={'rs-per':function(v){s.per=v==='CURRENT_QUARTER'?'CURRENT_QUARTER':'PREVIOUS_QUARTER';},'rs-freq':function(v){s.freq=['once','daily','weekly'].indexOf(v)>=0?v:'once';},'rs-wd':function(v){s.wd=+v;},'rs-tm2':function(v){s.tm=v;}};
+  Object.keys(map).forEach(function(k){var e=$(k);if(e)e.addEventListener('change',function(){map[k](this.value);saveRS();rsRender();});});
+}
+function schAdd(){
+  var A=window.KupeiAuth,id=RP.id,s=rsGet(id);
+  if(!A||!A.loggedIn||!A.loggedIn()){toast('建立排程需要登入帳號');if(A&&A.openLogin)A.openLogin();return;}
+  if(s.kw.length<2){toast('報告關鍵字至少要 2 個');return;}
+  var inp={code:id,period:s.per,frequency:s.freq,settings:repSettings(id)};
+  if(s.freq==='once'){if(!s.time){toast('請先選擇排程日期');return;}inp.date=s.time.slice(0,10);inp.time=s.time.slice(11,16);}
+  else{inp.time=s.tm||'09:00';if(s.freq==='weekly')inp.weekday=s.wd;}
+  var sc=schLoad(false);if(sc.busy)return;sc.busy=true;rsRender();
+  window.KupeiSchedules.create(inp).then(function(r){
+    sc.busy=false;
+    if(r.ok)toast('已建立排程：'+(r.data&&r.data.next_due_at?'下次約 '+tpTime(r.data.next_due_at)+' 之後排入':'已建立'));
+    else{toast('建立失敗：'+schErr(r));if(r.status===401&&A.openLogin)A.openLogin();}
+    schLoad(true);
+  },function(){sc.busy=false;toast('建立結果不明（連線中斷），已重新查詢');schLoad(true);});
+}
+function schDel(sid){
+  var x=((SCH.list)||[]).filter(function(q){return String(q.id)===String(sid);})[0];if(!x)return;
+  if(!window.confirm('刪除排程「'+(x.frequency==='once'&&x.date?x.date.replace(/-/g,'/')+' ':(SCH_FREQ[x.frequency]||'')+' ')+x.time+'」？已建立的請求不受影響。'))return;
+  window.KupeiSchedules.remove(x.id).then(function(r){if(r.ok)toast('已刪除排程');else toast('刪除失敗：'+schErr(r));schLoad(true);},function(){toast('刪除結果不明（連線中斷），已重新查詢');schLoad(true);});
+}
+/* 產生請求與排程共用的設定快照（只含自己上傳、仍存在的參考檔） */
+function repSettings(id){
+  var s=rsGet(id),have=PIN[id]&&PIN[id].list?PIN[id].list.map(function(f){return f.id;}):null;
+  return {keywords:s.kw.slice(0,10),includeNews:!!s.news,focusMajors:s.focus.slice(0,12),comparePrevious:!!s.cmp,inputIds:s.inputs.filter(function(x){return !have||have.indexOf(x)>=0;}).slice(0,20)};
+}
 function rsRender(){
   var ids=watchIds();if(ids.indexOf(RP.id)<0)RP.id=ids[0]||null;
-  $('rs-list').innerHTML=ids.map(function(id){var s=rsGet(id);return '<button class="'+(id===RP.id?'on':'')+'" data-rspick="'+esc(id)+'"><span>'+esc(id)+' '+esc(BYID[id].name)+'</span><span style="color:var(--faint);font-size:11px">'+(s.time?'排程 '+esc(s.time.slice(5).replace('-','/').replace('T',' ')):'手動')+'</span></button>';}).join('')||'<div class="placeholder">自選群組目前沒有公司。</div>';
+  $('rs-list').innerHTML=ids.map(function(id){var s=rsGet(id);return '<button class="'+(id===RP.id?'on':'')+'" data-rspick="'+esc(id)+'"><span>'+esc(id)+' '+esc(BYID[id].name)+'</span><span style="color:var(--faint);font-size:11px">'+(PAGES?(SCH.list?(SCH.list.filter(function(x){return x.code===id;}).length?'排程 '+SCH.list.filter(function(x){return x.code===id;}).length+' 個':'手動'):''):s.time?'排程 '+esc(s.time.slice(5).replace('-','/').replace('T',' ')):'手動')+'</span></button>';}).join('')||'<div class="placeholder">自選群組目前沒有公司。</div>';
   if(!RP.id){$('rs-panel').innerHTML='<div class="placeholder">請先把公司加入自選群組。</div>';return;}
   var s=rsGet(RP.id),r=BYID[RP.id];
   var h='<div style="display:flex;align-items:center;gap:10px"><h2>'+esc(r.id)+' '+esc(r.name)+'</h2><span class="grow"></span><span id="rs-genbox"><button class="btn primary" disabled title="報告流程契約交付後開放">產生報告（尚未開放）</button></span></div><div class="sub" id="rs-reqstate"></div>';
-  if(PAGES)h+='<div class="placeholder">目前「產生報告」只送出公司與期別；下方的關鍵字、納入新聞、與上一期比較、重點大項與參考檔選擇，要等後端報告契約（REPORT-01）完成後才會帶入報告。報告為規則式整理（不是 AI 撰寫）。</div>';
-  h+='<div class="field"><label class="k">報告關鍵字（最多 10 個，預設帶入個股新聞關鍵字；產業背景每份最多收 10 則）</label>'+chipBox(s.kw,'kw','r'+RP.id,10,'輸入後按 Enter')+'</div>';
+  if(PAGES)h+='<div class="placeholder">報告為規則式整理（不是 AI 撰寫）。按「產生報告」時，下方的關鍵字、納入新聞、與上一期比較、重點大項與勾選的參考檔會鎖成快照一起送出；之後再改設定不影響已送出的請求。</div>';
+  h+='<div class="field"><label class="k">'+(PAGES?'報告關鍵字（2～10 個，預設帶入個股新聞關鍵字）':'報告關鍵字（最多 10 個，預設帶入個股新聞關鍵字；產業背景每份最多收 10 則）')+'</label>'+chipBox(s.kw,'kw','r'+RP.id,10,'輸入後按 Enter')+(PAGES&&s.kw.length<2?'<span class="ev" role="status" style="font-size:12px">報告關鍵字至少要 2 個，目前不能產生報告或建立排程。</span>':'')+'</div>';
   var sd=s.time?s.time.slice(0,10):'',st=s.time?s.time.slice(11,16):'08:00',topt='';
   for(var hh2=0;hh2<24;hh2++)for(var mm=0;mm<60;mm+=30){var tv=String(hh2).padStart(2,'0')+':'+(mm?'30':'00');topt+='<option value="'+tv+'"'+(tv===st?' selected':'')+'>'+tv+'</option>';}
-  h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">'+(PAGES?'排程時間（尚未啟用：目前只保存設定，不會自動產生，請用「產生報告」手動送出）':'排程時間（選填；不設定則只能手動產生）')+'</span><div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+calHtml(sd)+
+  if(PAGES)h+=schedPages(s,sd,st,topt);
+  if(!PAGES)h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">排程時間（選填；不設定則只能手動產生）</span><div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+calHtml(sd)+
     '<div style="display:flex;flex-direction:column;gap:8px"><span style="font-size:12px;color:var(--text2)">'+(sd?'已選 '+esc(sd.replace(/-/g,'/'))+'（'+'日一二三四五六'.charAt(new Date(sd+'T00:00').getDay())+'）':'尚未選日期')+'</span><label class="sr" for="rs-tm">時間</label><select class="inp" id="rs-tm"'+(sd?'':' disabled')+'>'+topt+'</select>'+(s.time?'<button class="btn sm" data-rsclear="1" style="align-self:flex-start">清除排程</button>':'')+'</div></div>'+(s.status?'<div class="sub">排程狀態：'+esc({SCHEDULED:'已排程',PAUSED:'暫停（已移出自選）',EXPIRED:'已過期，未補跑',CANCELLED:'已取消',DONE:'已完成',FAILED:'失敗'}[s.status]||s.status)+'</div>':'')+'</div>';
   h+='<div class="field"><label class="chk"><input type="checkbox" id="rs-news"'+(s.news?' checked':'')+'>納入個股新聞</label><label class="chk"><input type="checkbox" id="rs-cmp"'+(s.cmp?' checked':'')+'>與上一期比較</label></div>';
   h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">重點大項（選填，報告會優先解讀）</span><div class="srcgrid">'+MAJ.map(function(l,k){return '<label class="chk"><input type="checkbox" data-focus="'+esc(MJ[k].id)+'"'+(s.focus.indexOf(MJ[k].id)>=0?' checked':'')+'>'+esc(l)+'</label>';}).join('')+'</div></div>';
   h+='<div class="field" id="rs-infield"><span class="k" style="font-size:12px;color:var(--muted)">參考資料</span><div id="rs-inputs"><div class="placeholder">上傳、列檔與移除端點交付後開放。</div><button class="btn sm" style="align-self:flex-start" disabled>加入檔案（尚未開放）</button></div></div>';
   h+='<div class="field"><span class="k" style="font-size:12px;color:var(--muted)">歷次報告</span><div id="rs-history"><div class="placeholder">尚無報告。</div></div></div>';
-  h+='<div class="placeholder">新的分析期別完成或加入參考資料時，只會提示「有新資料，是否重新產生」，不會自動產生。移出自選時暫停排程、保留報告與設定；再次加入時恢復，不補跑過期排程。</div>';
+  h+='<div class="placeholder">'+(PAGES?'新的分析期別完成或加入參考資料時，不會自動產生報告；只有你按「產生報告」或排程到期才會排入請求。移出自選不會自動刪除排程，請在上方自行刪除。':'新的分析期別完成或加入參考資料時，只會提示「有新資料，是否重新產生」，不會自動產生。移出自選時暫停排程、保留報告與設定；再次加入時恢復，不補跑過期排程。')+'</div>';
   $('rs-panel').innerHTML=h;
-  $('rs-tm').addEventListener('change',function(){if(s.time){s.time=s.time.slice(0,10)+'T'+this.value;saveRS();rsRender();}});
+  if($('rs-tm'))$('rs-tm').addEventListener('change',function(){if(s.time){s.time=s.time.slice(0,10)+'T'+this.value;saveRS();rsRender();}});
+  if(PAGES)schBind(s);
   $('rs-news').addEventListener('change',function(){s.news=this.checked;saveRS();});
   $('rs-cmp').addEventListener('change',function(){s.cmp=this.checked;saveRS();});
   document.querySelectorAll('[data-focus]').forEach(function(c){c.addEventListener('change',function(){var f=c.dataset.focus,i=s.focus.indexOf(f);if(c.checked&&i<0)s.focus.push(f);if(!c.checked&&i>=0)s.focus.splice(i,1);saveRS();});});
 }
 var _ct=chipTarget;chipTarget=function(key){if(key.charAt(0)==='r')return rsGet(key.slice(1));return _ct(key);};
 /* ================= 說明與狀態 ================= */
-var CODE_HELP=[['分數（名次）','試算分數；括號內為該大項全市場名次。個股頁另顯示同業名次（同產業，規格書 PG002，至少 5 家）。'],['政','政策分：規則依政策給分（例如歷史不足元件給 0 分），不是真實表現。名次旁「政n」表示 12 大項中有 n 項為政策分。'],['Ab','分數不可得（UNAVAILABLE）'],['NA','不適用（NOT_APPLICABLE／OUT_OF_SCOPE_FINANCIAL），個股頁展開可區分原狀態'],['RC','規則設定待確認（CONFIGURATION_PENDING）'],['FD','功能未啟用（NOT_ENABLED）'],['SU','適用範圍待確認（SCOPE_UNVERIFIED）'],['UN','未知狀態或分數數值異常'],['NR','總名次不可排名：任一大項沒有可排名的分數'],['未評估','尚無足夠已驗收財報，不參與排名（排在最後，依代號）'],['否決','資格否決：不改分數與名次'],['複核','財務複核：由實際觸發的 RGF003／RGF004 產生'],['第二階段','看最近年報往前約 5 年的指標變化，結果為可供判讀、注意警示或需複核；需複核分「趨勢惡化」「資料不足」。請人工判讀，不是否決'],['下層 n 項觸發','該大項底下觸發 Gate 的來源項目數（以項目去重，不是獨立事件數）'],['待查：代碼','中文對照表沒有收錄的代碼']];
+var CODE_HELP=[['分數（名次）','模型分數；括號內為該大項全市場名次。個股頁另顯示同業名次（同產業，規格書 PG002，至少 5 家）。'],['政','政策分：規則依政策給分（例如歷史不足元件給 0 分），不是真實表現。名次旁「政n」表示 12 大項中有 n 項為政策分。'],['Ab','分數不可得（UNAVAILABLE）'],['NA','不適用（NOT_APPLICABLE／OUT_OF_SCOPE_FINANCIAL），個股頁展開可區分原狀態'],['RC','規則設定待確認（CONFIGURATION_PENDING）'],['FD','功能未啟用（NOT_ENABLED）'],['SU','適用範圍待確認（SCOPE_UNVERIFIED）'],['UN','未知狀態或分數數值異常'],['NR','總名次不可排名：任一大項沒有可排名的分數'],['未評估','尚無足夠已驗收財報，不參與排名（排在最後，依代號）'],['否決','資格否決：不改分數與名次'],['複核','財務複核：由實際觸發的 RGF003／RGF004 產生'],['第二階段','看最近年報往前約 5 年的指標變化，結果為可供判讀、注意警示或需複核；需複核分「趨勢惡化」「資料不足」。請人工判讀，不是否決'],['下層 n 項觸發','該大項底下觸發 Gate 的來源項目數（以項目去重，不是獨立事件數）'],['待查：代碼','中文對照表沒有收錄的代碼']];
 var EXPL=null,EXPL_LOADING=false;
 function explFrom(C){
   function conv(n){return {id:n.id,en:n.en,zh:n.zh,goal:n.goal,full:n.def&&n.def!==n.zh?n.def:'',w:n.lv>1?n.w:null,c:(n.c||[]).map(conv)};}
@@ -1248,9 +1332,10 @@ var wasM=isM();window.addEventListener('resize',function(){var m=isM();if(m!==wa
 function basisTxt(){return '分析財報 '+v(H.requested_period)+'｜DAR-L 依 '+v(H.annual_period)+' 年報｜資料計算 '+v(STAT.data_calculation_version)+'｜as-of '+v(H.as_of);}
 $('h-basis').textContent=basisTxt();
 /* 手機註腳：日期不在中間斷行 */
-function mfootRender(){$('h-mfoot').innerHTML=esc(basisTxt()+'｜試算'+(PAGES&&fmSrc()?'｜資料來源：FinMind':'')).replace(/\d{4}-\d{2}-\d{2}|\d{4}Q\d/g,'<span class="nb">$&</span>');}
+function mfootRender(){$('h-mfoot').innerHTML=esc(basisTxt()+'｜模型分數'+(PAGES&&fmSrc()?'｜資料來源：FinMind':'')).replace(/\d{4}-\d{2}-\d{2}|\d{4}Q\d/g,'<span class="nb">$&</span>');}
 mfootRender();
-function bannerRender(){$('h-banner').innerHTML='<span><b>目前分數為試算版本</b>，回測效度驗證中；首頁排序只供瀏覽，不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.live?'行情為 FinMind 盤中價（約 30 秒更新；'+esc(QT.live.hms||'—')+'；資料來源：FinMind）':QT.close?(QT.close.pending.L&&QT.close.pending.O?'行情為 ':'行情：'+(QT.close.pending.L?'上櫃':'上市')+'為每日收盤，'+(QT.close.pending.L?'上市':'上櫃')+'暫用 ')+esc(md(QT.close.day))+' FinMind 收盤快照（正式收盤待更新；資料來源：FinMind）':QT.intra?'行情為證交所盤中快照（約 10 分鐘延遲，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+(fmSrc()?'；資料來源：FinMind':'')+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?(QT.live||QT.intra?'盤中價':'收盤價'):'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
+function calcVer(){var x=STAT&&STAT.data_calculation_version;return x?(/^v/i.test(String(x))?String(x):'V'+x):'';}
+function bannerRender(){var hv=$('hp-ver');if(hv&&calcVer())hv.textContent=calcVer();$('h-banner').innerHTML='<span><b>正式計算版本 '+esc(calcVer()||'（版本未提供）')+'</b>：模型分數供篩選與分析參考，不是投資建議；模型效度持續驗證中，首頁排序不代表分析結論。</span><span>否決／複核徽章：'+esc(GATE_LABEL)+'，不改分數與名次。</span><span>'+(QT.on?(PAGES?(QT.live?'行情為 FinMind 盤中價（約 30 秒更新；'+esc(QT.live.hms||'—')+'；資料來源：FinMind）':QT.close?(QT.close.pending.L&&QT.close.pending.O?'行情為 ':'行情：'+(QT.close.pending.L?'上櫃':'上市')+'為每日收盤，'+(QT.close.pending.L?'上市':'上櫃')+'暫用 ')+esc(md(QT.close.day))+' FinMind 收盤快照（正式收盤待更新；資料來源：FinMind）':QT.intra?'行情為證交所盤中快照（約 10 分鐘延遲，非逐筆即時；'+esc(QT.intra.hm||'—')+'）':'行情為每日收盤價（非即時，收盤日 '+esc(md(QT.tdate))+(fmSrc()?'；資料來源：FinMind':'')+'）'):'成交價來源 FinMind（主機每 30 秒更新）'):'行情尚未接上')+'；'+(VAL.on?'安全邊際依'+(PAGES?(QT.live||QT.intra?'盤中價':'收盤價'):'即時股價')+'計算':'估價尚未提供')+'。</span><span>項目與代碼說明見工作列「說明」。</span>';}
 bannerRender();
 $('h-upd').textContent='行情：尚未接上';
 if(PAGES){$('w-store').textContent='自選存在這台瀏覽器；登入帳號（左側「帳號」）後各裝置同步';$('ns-store').textContent='設定存在這台瀏覽器；登入帳號後各裝置同步｜來源：Google／Bing 新聞（每 30 分鐘更新）';}
@@ -1294,7 +1379,7 @@ function cached(store,key,path,then){
 function newsErr(r){
   var code=r&&r.data&&r.data.error_code;
   if(!r||!r.status)return '新聞載入失敗（連線中斷），請稍後重新整理。';
-  return {NOT_PROVIDED:'新聞尚未提供（後端尚未開通）。',NEWS_NO_KEYWORDS:'這組尚未設定關鍵字，請到「新聞關鍵字設定」新增。',NOT_ENOUGH_KEYWORDS:'產業新聞每組至少要 2 個關鍵字，目前不足，不會產生新聞；請到「新聞關鍵字設定」補上。',RATE_LIMITED:'請求太頻繁，請稍後再試。',NEWS_DISABLED:'新聞服務尚未啟用。',NEWS_GROUP_NOT_FOUND:'這個關鍵字組尚未存到主機，請到「新聞關鍵字設定」按儲存。',STOCK_NOT_WATCHED:'此公司不在自選群組，沒有個股新聞。',INVALID_NEWS_QUERY:'新聞日期或顯示區間不正確。',COMPANY_NOT_FOUND:'找不到公司。'}[code]||('新聞載入失敗：'+errMsg(r));
+  return {NOT_PROVIDED:'新聞尚未提供（後端尚未開通）。',NEWS_NO_KEYWORDS:'這組尚未設定關鍵字，請到「新聞關鍵字設定」新增。',NOT_ENOUGH_KEYWORDS:(r.data&&r.data.scope==='stock'?'個股新聞至少要 1 個主題詞（公司名稱與代號會自動帶入，不算主題詞），目前沒有，不會產生新聞；請到「新聞關鍵字設定」補上。':'產業新聞每組至少要 2 個關鍵字，目前不足，不會產生新聞；請到「新聞關鍵字設定」補上。'),RATE_LIMITED:'請求太頻繁，請稍後再試。',NEWS_DISABLED:'新聞服務尚未啟用。',NEWS_GROUP_NOT_FOUND:'這個關鍵字組尚未存到主機，請到「新聞關鍵字設定」按儲存。',STOCK_NOT_WATCHED:'此公司不在自選群組，沒有個股新聞。',INVALID_NEWS_QUERY:'新聞日期或顯示區間不正確。',COMPANY_NOT_FOUND:'找不到公司。'}[code]||('新聞載入失敗：'+errMsg(r));
 }
 var VIA_ZH={google:'Google 新聞',bing:'Bing 新聞',technews:'科技新報 RSS'};
 function limitTags(arr){return (arr||[]).map(function(x){return '<span class="tag" style="background:var(--line);color:var(--text2)">'+esc(LIMIT_ZH[x]||x)+'</span>';}).join(' ');}
@@ -1311,7 +1396,7 @@ function newsList(c,n,compact){
   if(c.loading)return '<span class="placeholder">新聞載入中…</span>';
   if(!c.r.ok)return '<span class="placeholder">'+esc(newsErr(c.r))+'</span>';
   var d=c.r.data||{},arts=d.articles||[];
-  if(!arts.length)return '<span class="placeholder">'+(d.precise?'此區間沒有同時命中至少 2 個關鍵字的新聞。':'此區間沒有符合關鍵字的新聞。')+'</span> '+limitTags(d.retrieval_limitations);
+  if(!arts.length)return '<span class="placeholder">'+(d.scope==='stock'?'此區間沒有符合收入條件的新聞（公司名稱／代號＋1 個主題詞，或至少 2 個不同主題詞）。':d.precise?'此區間沒有同時命中至少 2 個關鍵字的新聞。':'此區間沒有符合關鍵字的新聞。')+'</span> '+limitTags(d.retrieval_limitations);
   return arts.slice(0,n).map(function(a){return artHtml(a,compact);}).join('')+(arts.length>n?'<span class="sub">另有 '+(arts.length-n)+' 則，見新聞頁</span>':'');
 }
 var _hMNews=hMNews;
@@ -1336,7 +1421,7 @@ var _sNews=sNews;
 sNews=function(id){
   if(!NEWS_ON||!groupOf(id)){_sNews(id);return;}
   var c=cached(NC,'s|'+id+'|'+ymdOff(0),'/news/stock/'+encodeURIComponent(id)+'?date='+ymdOff(0)+'&days=5',function(){if(curPage==='stock'&&SP.id===id)sNews(id);});
-  $('s-news').innerHTML='<div style="display:flex;align-items:center;gap:10px"><h2>個股新聞</h2><span class="sub">近 5 日｜關鍵字：'+esc(stockKw(id).kw.join('、')||'載入中')+'</span><span class="grow"></span><a href="#/news/s'+esc(id)+'" style="font-size:12px">新聞頁</a></div>'+newsList(c,5,false);
+  $('s-news').innerHTML='<div style="display:flex;align-items:center;gap:10px"><h2>個股新聞</h2><span class="sub">近 5 日｜主題詞：'+esc(topicsText(id))+'</span><span class="grow"></span><a href="#/news/s'+esc(id)+'" style="font-size:12px">新聞頁</a></div>'+newsList(c,5,false);
 };
 var _nRender=nRender;
 nRender=function(kw){
@@ -1346,7 +1431,7 @@ nRender=function(kw){
   else $('n-banner2').textContent='規則式整理（不是 AI 摘要）；只保存標題、RSS 摘要與連結，不保存新聞全文';
   var isStock=NP.kw.charAt(0)==='s',date=ymdOff(+$('n-date').value||0),c,title;
   if(isStock){
-    var sid=NP.kw.slice(1),inW=watchIds().indexOf(sid)>=0;title=(BYID[sid]?sid+' '+BYID[sid].name:sid)+'｜'+(inW?stockKw(sid).kw.join('、'):'未追蹤');
+    var sid=NP.kw.slice(1),inW=watchIds().indexOf(sid)>=0;title=(BYID[sid]?sid+' '+BYID[sid].name:sid)+'｜'+(inW?topicsText(sid):'未追蹤');
     if(!inW){$('n-main').innerHTML='<h2 class="kw">'+esc(title)+'</h2><div class="placeholder">此公司不在自選群組，沒有個股新聞。</div>';$('n-src').innerHTML='';return;}
     c=cached(NC,'s|'+sid+'|'+date,'/news/stock/'+encodeURIComponent(sid)+'?date='+date+'&days=5',function(){if(curPage==='news')nRender(NP.kw);});
   }else{
@@ -1359,7 +1444,7 @@ nRender=function(kw){
   var d=c.r.data||{},arts=d.articles||[],ex=d.excluded||[];
   h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0">'+limitTags(d.retrieval_limitations)+'</div>';
   if(d.summary)h+='<div class="report" style="border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0"><span class="sub">規則式彙整（依發布時間列出前 5 則標題，非 AI 摘要）</span><p>'+esc(d.summary).replace(/〔(S\d+)〕/g,'<span class="cite">〔$1〕</span>')+'</p></div>';
-  h+=arts.length?arts.map(function(a){return artHtml(a,false);}).join(''):'<div class="placeholder">'+(d.precise?'此區間沒有同時命中至少 2 個關鍵字的新聞。':'此區間沒有符合關鍵字的新聞。')+'</div>';
+  h+=arts.length?arts.map(function(a){return artHtml(a,false);}).join(''):'<div class="placeholder">'+(d.scope==='stock'?'此區間沒有符合收入條件的新聞（公司名稱／代號＋1 個主題詞，或至少 2 個不同主題詞）。':d.precise?'此區間沒有同時命中至少 2 個關鍵字的新聞。':'此區間沒有符合關鍵字的新聞。')+'</div>';
   if(ex.length)h+='<details style="margin-top:8px"><summary class="sub">已排除 '+ex.length+' 則（標題含排除字）</summary>'+ex.map(function(a){return '<div class="sub" style="padding:2px 0">'+esc(a.title)+'｜排除字：'+esc((a.matched_excludes||[]).join('、'))+'</div>';}).join('')+'</details>';
   h+='<div class="sub" style="margin-top:6px">產生時間 '+esc(tpTime(d.generated_at))+'</div>';
   $('n-main').innerHTML=h;
@@ -1393,7 +1478,7 @@ var _saveNS3=saveNS;saveNS=function(){NC={};_saveNS3();};
 function repErr(r){
   var code=r&&r.data&&r.data.error_code;
   if(!r||!r.status)return '連線中斷，請稍後重新整理。';
-  return {NOT_PROVIDED:'報告尚未提供（後端尚未開通）。',QUOTA_EXCEEDED:'報告請求已達上限（最多 20 筆），請等現有請求完成後再試。',UNAUTHENTICATED:'需要登入帳號。',RATE_LIMITED:'請求太頻繁，請稍後再試。',REPORTS_DISABLED:'報告服務尚未啟用（主機尚未設定報告根目錄）。',REPORT_NOT_FOUND:'找不到已發布報告。',STOCK_NOT_WATCHED:'此公司不在自選群組。',REPORT_ALREADY_ACTIVE:'此公司已有進行中的報告工作。',REPORT_PERIOD_UNAVAILABLE:'期別不在正式發布資料中。',INPUT_TOO_LARGE:'檔案超過 20 MB 上限。',INPUT_TYPE_NOT_ALLOWED:'不支援的檔案類型。',INPUT_TYPE_MISMATCH:'檔案內容與副檔名不符，請確認檔案格式。',PAYLOAD_TOO_LARGE:'檔案超過 20 MB 上限。',INVALID_FILENAME:'檔名不正確。',INPUT_FILE_REQUIRED:'請選擇檔案。',INPUT_NOT_FOUND:'找不到參考資料。'}[code]||(r.status===413?'檔案過大。':errMsg(r));
+  return {NOT_PROVIDED:'報告尚未提供（後端尚未開通）。',QUOTA_EXCEEDED:'報告請求已達上限（最多 20 筆），請等現有請求完成後再試。',UNAUTHENTICATED:'需要登入帳號。',RATE_LIMITED:'請求太頻繁，請稍後再試。',REPORTS_DISABLED:'報告服務尚未啟用（主機尚未設定報告根目錄）。',REPORT_NOT_FOUND:'找不到已發布報告。',STOCK_NOT_WATCHED:'此公司不在自選群組。',REPORT_ALREADY_ACTIVE:'此公司已有進行中的報告工作。',REPORT_PERIOD_UNAVAILABLE:'期別不在正式發布資料中。',BAD_REQUEST:'報告設定不合法（關鍵字 2～10 個；勾選的參考檔必須是自己上傳且未刪除的檔案）。',INPUT_TOO_LARGE:'檔案超過 20 MB 上限。',INPUT_TYPE_NOT_ALLOWED:'不支援的檔案類型。',INPUT_TYPE_MISMATCH:'檔案內容與副檔名不符，請確認檔案格式。',PAYLOAD_TOO_LARGE:'檔案超過 20 MB 上限。',INVALID_FILENAME:'檔名不正確。',INPUT_FILE_REQUIRED:'請選擇檔案。',INPUT_NOT_FOUND:'找不到參考資料。'}[code]||(r.status===413?'檔案過大。':errMsg(r));
 }
 function repLoad(id,force,then){if(force)delete RC[id];return cached(RC,id,'/reports/'+encodeURIComponent(id),then);}
 function inLoad(id,force,then){if(force)delete IC[id];return cached(IC,id,'/reports/'+encodeURIComponent(id)+'/inputs',then);}
@@ -1525,10 +1610,11 @@ function pinRender(id,re,login){
   var box=$('rs-inputs');
   if(!login||!window.KupeiInputs){box.innerHTML='<div class="placeholder">參考檔需要登入帳號（左側「帳號」）；只有你自己看得到、下載與刪除自己上傳的檔案。</div>';return;}
   var s=pinLoad(id,false,re),h;
+  if(s.list){var _rs=rsGet(id),_have=s.list.map(function(f){return f.id;}),_n=_rs.inputs.length;_rs.inputs=_rs.inputs.filter(function(x){return _have.indexOf(x)>=0;});if(_rs.inputs.length!==_n)saveRS();}
   if(s.loading)h='<div class="placeholder">參考檔載入中…</div>';
   else if(s.err)h='<div class="placeholder">'+esc(pinErr(s.err))+' <button class="btn sm" data-pin-retry="1">重試</button></div>';
   else h=s.list.length?s.list.map(function(f){
-    return '<div class="pin-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:4px 0"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</span>'+(f.locked?'<span class="badge b-fin" title="已被報告引用，不能刪除">已鎖定</span>':'')+'<span class="grow"></span><span class="sub" title="SHA-256 '+esc(f.sha256)+'">'+fmtSize(f.bytes)+'｜SHA-256 '+esc(String(f.sha256).slice(0,12))+'…｜'+esc(tpTime(f.createdAt))+'</span><button class="btn sm" data-pin-dl="'+esc(f.id)+'" aria-label="下載 '+esc(f.name)+'">下載</button><button class="btn sm" data-pin-rm="'+esc(f.id)+'"'+(f.locked?' disabled title="已被報告引用，不能刪除"':'')+' aria-label="刪除 '+esc(f.name)+'">刪除</button></div>';
+    return '<div class="pin-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:4px 0"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</span>'+(f.locked?'<span class="badge b-fin" title="已被報告引用，不能刪除">已鎖定</span>':'')+'<label class="chk"><input type="checkbox" data-pinsel="'+esc(f.id)+'"'+(rsGet(id).inputs.indexOf(f.id)>=0?' checked':'')+'>納入報告</label><span class="grow"></span><span class="sub" title="SHA-256 '+esc(f.sha256)+'">'+fmtSize(f.bytes)+'｜SHA-256 '+esc(String(f.sha256).slice(0,12))+'…｜'+esc(tpTime(f.createdAt))+'</span><button class="btn sm" data-pin-dl="'+esc(f.id)+'" aria-label="下載 '+esc(f.name)+'">下載</button><button class="btn sm" data-pin-rm="'+esc(f.id)+'"'+(f.locked?' disabled title="已被報告引用，不能刪除"':'')+' aria-label="刪除 '+esc(f.name)+'">刪除</button></div>';
   }).join(''):'<div class="placeholder">尚無參考檔。</div>';
   h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><label class="sr" for="rs-file">選擇參考檔</label><input type="file" id="rs-file" accept="'+PIN_EXT.join(',')+'"'+(s.busy?' disabled':'')+'><button class="btn sm" data-pin-add="'+esc(id)+'"'+(s.busy?' disabled':'')+'>'+(s.busy?'上傳中…':'加入檔案')+'</button><span class="sub">單檔 20 MiB 以內；PDF、TXT、MD、CSV、XLSX、PNG、JPEG；每人最多 50 個或 200 MiB。報告 V1 只列出檔名與雜湊，不會讀取檔案內容。</span></div>';
   box.innerHTML=h;
@@ -1563,12 +1649,19 @@ function pinRemove(id,fid){
     pinRefresh(id);
   },function(){toast('刪除結果不明（連線中斷），已重新查詢');pinRefresh(id);});
 }
+document.addEventListener('change',function(e){
+  var t=e.target;if(!PAGES||!t||!t.dataset||t.dataset.pinsel===undefined||!RP.id)return;
+  var s=rsGet(RP.id),i=s.inputs.indexOf(t.dataset.pinsel);
+  if(t.checked&&i<0){if(s.inputs.length>=20){t.checked=false;toast('每次報告最多納入 20 個參考檔');return;}s.inputs.push(t.dataset.pinsel);}
+  if(!t.checked&&i>=0)s.inputs.splice(i,1);
+  saveRS();
+});
 /* Pages 報告設定：產生請求（只限登入帳號）、歷次報告、自己的請求、參考檔（只限登入） */
 function rsRenderPages(id,re){
   var c=repLoad(id,false,re),A=window.KupeiAuth,login=!!(A&&A.loggedIn&&A.loggedIn());
   if(c.lg==null)c.lg=login;else if(c.lg!==login){c=repLoad(id,true,re);c.lg=login;} /* 登入狀態變了：重讀（自己的請求只有登入後讀得到） */
   var d=c.r&&c.r.ok&&c.r.data?c.r.data:null,q=d?d.current_request:null,busy=!!(q&&REQ_ACTIVE.indexOf(q.status)>=0);
-  $('rs-genbox').innerHTML='<button class="btn primary" data-repgen="'+esc(id)+'"'+(busy||c.loading?' disabled':'')+' title="'+(busy?'此公司已有排隊中的報告請求':'以目前正式分析期別 '+esc(BYID[id].period||'')+' 送出產生請求')+'">'+(busy?'請求排隊中':login?'產生報告':'產生報告（需登入）')+'</button>';
+  $('rs-genbox').innerHTML='<button class="btn primary" data-repgen="'+esc(id)+'"'+(busy||c.loading||rsGet(id).kw.length<2?' disabled':'')+' title="'+(rsGet(id).kw.length<2?'報告關鍵字至少要 2 個':busy?'此公司已有排隊中的報告請求':'以目前正式分析期別 '+esc(BYID[id].period||'')+' 送出產生請求')+'">'+(busy?'請求排隊中':login?'產生報告':'產生報告（需登入）')+'</button>';
   $('rs-reqstate').innerHTML=busy?reqLine(q):(c.r&&!c.r.ok?esc(repErr(c.r)):(login?'':'送出產生請求需要登入帳號（左側「帳號」）。'));
   pinRender(id,re,login);
   var hh;
@@ -1578,13 +1671,14 @@ function rsRenderPages(id,re){
     hh=ps.length?ps.map(function(p){return '<div style="display:flex;gap:8px"><a href="#/report/'+esc(id)+'/'+esc(p.period)+'/'+esc(p.revision)+'">'+repLabel(p)+'</a><span class="sub">產生 '+esc(tpTime(p.published_at))+(p.title?'｜'+esc(p.title):'')+'</span></div>';}).join(''):'<div class="placeholder">尚無報告。</div>';
     if(fs.length)hh+='<div class="sub">另有 '+fs.length+' 份產生失敗：'+fs.map(function(p){return repLabel(p);}).join('、')+'</div>';
     var rq=d.requests;
-    hh+='<div class="sub" style="margin-top:6px">我的請求</div>'+(rq==null?'<div class="placeholder">'+(login?'請求紀錄暫時無法讀取。':'登入帳號後顯示自己的請求。')+'</div>':rq.length?rq.slice(0,20).map(function(r){return '<div class="sub" style="padding:2px 0">'+esc(r.period)+'｜'+esc(REQ_ZH[r.status]||r.status)+'｜送出 '+esc(tpTime(r.created_at))+(r.updated_at?'｜更新 '+esc(tpTime(r.updated_at)):'')+(r.message?'｜'+esc(reqMsg(r.message)):'')+'</div>';}).join(''):'<div class="placeholder">尚無請求。</div>');}
+    hh+='<div class="sub" style="margin-top:6px">我的請求</div>'+(rq==null?'<div class="placeholder">'+(login?'請求紀錄暫時無法讀取。':'登入帳號後顯示自己的請求。')+'</div>':rq.length?rq.slice(0,20).map(function(r){return '<div class="sub" style="padding:2px 0">'+esc(r.period)+(r.rev!=null?' 版次 '+esc(r.rev):'')+'｜'+esc(REQ_ZH[r.status]||r.status)+'｜'+(r.trigger==='SCHEDULED'?'排程':'手動')+(r.settings?'｜'+r.settings.keywords.length+' 個關鍵字':'')+'｜送出 '+esc(tpTime(r.created_at))+(r.updated_at?'｜更新 '+esc(tpTime(r.updated_at)):'')+(r.message?'｜'+esc(reqMsg(r.message)):'')+'</div>';}).join(''):'<div class="placeholder">尚無請求。</div>');}
   $('rs-history').innerHTML=hh;
 }
 function repGenPages(id,btn){
   var A=window.KupeiAuth;
   if(!A||!A.loggedIn||!A.loggedIn()){toast('產生報告需要登入帳號');btn.disabled=false;if(A&&A.openLogin)A.openLogin();return;}
-  KupeiAPI.req('POST','/reports/'+encodeURIComponent(id)+'/requests',{period:BYID[id].period,trigger:'MANUAL'}).then(function(r){
+  if(rsGet(id).kw.length<2){toast('報告關鍵字至少要 2 個');btn.disabled=false;return;}
+  KupeiAPI.req('POST','/reports/'+encodeURIComponent(id)+'/requests',{period:BYID[id].period,trigger:'MANUAL',settings:repSettings(id)}).then(function(r){
     if(r.ok)toast(r.status===202?'已送出報告請求（排隊中）':'已有排隊中的同期別請求，沿用同一筆');
     else if(r.status===401){toast('登入已過期，請重新登入');if(A.openLogin)A.openLogin();}
     else toast('無法送出：'+repErr(r));
@@ -1608,9 +1702,12 @@ function upload(id,file){
     },function(){toast('上傳結果不明（連線中斷），已重新查詢');inRefresh(id);});
 }
 document.addEventListener('click',function(e){
-  var t=e.target.closest('[data-repgen],[data-inrm],[data-inadd],[data-pin-add],[data-pin-dl],[data-pin-rm],[data-pin-retry]');if(!t)return;var d=t.dataset;
+  var t=e.target.closest('[data-repgen],[data-inrm],[data-inadd],[data-pin-add],[data-pin-dl],[data-pin-rm],[data-pin-retry],[data-schadd],[data-schdel],[data-schretry]');if(!t)return;var d=t.dataset;
   if(PAGES){
     var pid=RP.id;if(!pid)return;
+    if(d.schadd!==undefined){schAdd();return;}
+    if(d.schdel!==undefined){schDel(d.schdel);return;}
+    if(d.schretry!==undefined){schLoad(true);return;}
     if(d.pinAdd!==undefined){var pf=$('rs-file');pinUpload(d.pinAdd,pf&&pf.files[0]);return;}
     if(d.pinDl!==undefined){pinDownload(pid,d.pinDl);return;}
     if(d.pinRm!==undefined){pinRemove(pid,d.pinRm);return;}

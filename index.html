@@ -150,7 +150,7 @@
 <div id="ns-groups"></div>
 </div>
 <div class="card">
-<div style="display:flex;align-items:center;gap:10px"><h2>個股新聞</h2><span class="sub">只列出目前在自選群組中的公司；加入自選時自動建立「公司名稱、代號」</span></div>
+<div style="display:flex;align-items:center;gap:10px"><h2>個股新聞</h2><span class="sub">只列出目前在自選群組中的公司；公司名稱與代號自動帶入、不占名額，主題詞最多 10 個。收入條件：標題＋摘要命中「公司名稱或代號＋至少 1 個主題詞」，或沒命中公司名稱與代號但至少命中 2 個不同主題詞</span></div>
 <div id="ns-stocks"></div>
 </div>
 <div class="card">
@@ -175,7 +175,7 @@
 <div class="tablewrap" style="padding:4px 16px 16px">
 <section class="limits" id="hp-limits" aria-labelledby="hp-limits-h">
 <h2 id="hp-limits-h" style="margin:12px 0 6px">模型限制與回測結果（規格 V3.0.30）</h2>
-<p>目前分數為試算版本，<b>模型效度尚未完全驗證</b>。分數只供篩選與瀏覽，不是投資建議。</p>
+<p>目前分數為正式計算版本 <span id="hp-ver">V3.0.30</span> 的模型分數，<b>模型效度持續驗證中</b>。分數供篩選與分析參考，不是投資建議。</p>
 <p>回測方式：在 4 個歷史時點用 V3.0.29 規則重算分數，觀察之後四季的財務變化，檢查「分數低的公司，之後是否較常出現 ROE 下滑、營收衰退、負債上升等情況」。回測不檢查股價報酬。</p>
 <p>評分規則與 V3.0.29 相同，回測結果沿用；V3.0.30 只調整估價的股價相依性。</p>
 <p>整體結果：11 個大項中，4 項通過、6 項待複核、1 項方向相反，未出現多數大項反向的情況。</p>
