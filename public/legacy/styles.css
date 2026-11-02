@@ -150,15 +150,15 @@ table.tree{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
 .caret{display:inline-block;width:12px;color:var(--faint);font-size:10px;margin-top:2px}
 .lv1 td{background:#191D21}
 .lv1 .en1{font-weight:700}
-/* 展開後的中項／小項用不同冷色底區分（低對比，文字對比不變）；大項未展開時外觀不變 */
-.lv2 td{background:#1B232B}
-.lv3 td{background:#141B22}
-.lv2:hover td{background:#202A33}
-.lv3:hover td{background:#18212A}
-.lv2:focus-within td{background:#202A33}
-.lv3:focus-within td{background:#18212A}
-.lv2 td:first-child{box-shadow:inset 3px 0 0 #2C3A47}
-.lv3 td:first-child{box-shadow:inset 3px 0 0 #222E39}
+/* 展開後分群：展開中的大項與其中項、小項共用左側藍色條，中項底色明顯偏藍、小項較深並多一道內側細條；大項未展開時外觀不變 */
+.lv1.open td:first-child{box-shadow:inset 3px 0 0 #4F86B8}
+.lv2 td{background:#1F2C39}
+.lv3 td{background:#18222C}
+.lv2:hover td,.lv2:focus-within td{background:#253445}
+.lv3:hover td,.lv3:focus-within td{background:#1C2834}
+.lv2 td:first-child{box-shadow:inset 3px 0 0 #4F86B8}
+.lv3 td:first-child{box-shadow:inset 3px 0 0 #4F86B8,inset 7px 0 0 #18222C,inset 9px 0 0 #6F93B5}
+.lv3:hover td:first-child,.lv3:focus-within td:first-child{box-shadow:inset 3px 0 0 #4F86B8,inset 7px 0 0 #1C2834,inset 9px 0 0 #6F93B5}
 .zh{color:var(--muted);font-size:11px;margin-left:6px}
 .per{color:var(--faint);font-size:10px;margin-left:6px;font-family:"IBM Plex Mono",monospace}
 .note{color:var(--text2);line-height:1.55}
@@ -336,6 +336,10 @@ main{position:relative}
   .tree td{border-bottom:0}
   .tree td.c3{grid-column:1/-1;padding-top:0}
   .tree .c1{white-space:normal}
+  /* 手機備註換到第二行：分群色條延伸到備註格，整列連成一條 */
+  .tree .lv1.open td.c3,.tree .lv2 td.c3{box-shadow:inset 3px 0 0 #4F86B8}
+  .tree .lv3 td.c3{padding-left:18px;box-shadow:inset 3px 0 0 #4F86B8,inset 7px 0 0 #18222C,inset 9px 0 0 #6F93B5}
+  .tree .lv3:hover td.c3,.tree .lv3:focus-within td.c3{box-shadow:inset 3px 0 0 #4F86B8,inset 7px 0 0 #1C2834,inset 9px 0 0 #6F93B5}
   .kwrow{grid-template-columns:1fr}
   .two>.l{flex:0 0 auto}
   .newsgrid .side{min-width:0}

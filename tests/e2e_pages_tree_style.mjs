@@ -1,4 +1,4 @@
-// C-07／C-08：個股問題小字說明精簡；評分樹展開後中項（lv2）與小項（lv3）有不同底色，大項未展開時外觀不變。
+// C-07／C-08／C-11：個股問題小字說明精簡；評分樹展開後大項、中項（lv2）、小項（lv3）以底色與左側色條分群，大項未展開時外觀不變。
 // 評分用 fixture（或 KUPEI_TEST_SESSION 讀線上），後端其他端點用假的；不建立帳號。測試檔要和 _kupei_test.mjs 放同一個資料夾執行。
 // BASE=http://127.0.0.1:5173/ KP_FIXTURE=<repo>/tests/fixtures/kupei-data.json node e2e_pages_tree_style.mjs
 import { chromium } from 'playwright'
@@ -29,6 +29,7 @@ async function open(hash, vp) {
   return p
 }
 const bg = (p, sel) => p.evaluate((s) => { const e = document.querySelector(s); return e ? getComputedStyle(e.querySelector('td')).backgroundColor : null }, sel)
+const bar = (p, sel) => p.evaluate((s) => { const e = document.querySelector(s); return e ? getComputedStyle(e.querySelector('td')).boxShadow : null }, sel)
 const lum = (c) => { const m = c.match(/\d+/g).map(Number); return 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2] }
 
 for (const [label, vp] of [['桌機', { width: 1440, height: 900 }], ['手機（iPhone 14）', { width: 390, height: 844 }]]) {
@@ -36,17 +37,22 @@ for (const [label, vp] of [['桌機', { width: 1440, height: 900 }], ['手機（
     const p = await open('#/stock/2330/home', vp)
     const n = await p.evaluate(() => ({ lv2: document.querySelectorAll('#s-tree tr.lv2').length, lv3: document.querySelectorAll('#s-tree tr.lv3').length }))
     must(n.lv2 === 0 && n.lv3 === 0, '收合時不該有子列：' + JSON.stringify(n))
-    must((await bg(p, '#s-tree tr.lv1')) === 'rgb(25, 29, 33)', '大項底色：' + await bg(p, '#s-tree tr.lv1')); await p.context().close()
+    must((await bg(p, '#s-tree tr.lv1')) === 'rgb(25, 29, 33)', '大項底色：' + await bg(p, '#s-tree tr.lv1'))
+    must((await bar(p, '#s-tree tr.lv1')) === 'none', '收合的大項不該有色條：' + await bar(p, '#s-tree tr.lv1')); await p.context().close()
   })
   await check(`${label}：展開大項→中項有 lv2，展開中項→小項有 lv3，底色各不相同且樣式生效`, async () => {
     const p = await open('#/stock/2330/home', vp)
     await p.click('#s-tree tr.lv1 [data-tog]'); await p.waitForSelector('#s-tree tr.lv2', { timeout: 5000 })
     const c1 = await bg(p, '#s-tree tr.lv1'), c2 = await bg(p, '#s-tree tr.lv2')
-    must(c2 === 'rgb(27, 35, 43)' && c1 === 'rgb(25, 29, 33)', `大項 ${c1}、中項 ${c2}`)
+    must(c2 === 'rgb(31, 44, 57)' && c1 === 'rgb(25, 29, 33)', `大項 ${c1}、中項 ${c2}`)
+    must(/rgb\(79, 134, 184\)/.test(await bar(p, '#s-tree tr.lv1.open')), '展開的大項沒有分群色條：' + await bar(p, '#s-tree tr.lv1.open'))
+    must(/rgb\(79, 134, 184\)/.test(await bar(p, '#s-tree tr.lv2')), '中項沒有分群色條：' + await bar(p, '#s-tree tr.lv2'))
+    must(lum(c2) - lum(c1) >= 10, '中項與大項底色差距不足：' + c1 + ' / ' + c2)
     must((await p.$$('#s-tree tr.lv3')).length === 0, '只展開大項時不該有 lv3')
     const tog = await p.$('#s-tree tr.lv2 [data-tog]'); must(!!tog, '中項沒有可展開的按鈕（資料沒有小項）')
     await tog.click(); await p.waitForSelector('#s-tree tr.lv3', { timeout: 5000 })
-    const c3 = await bg(p, '#s-tree tr.lv3'); must(c3 === 'rgb(20, 27, 34)' && new Set([c1, c2, c3]).size === 3, `小項 ${c3}`)
+    const c3 = await bg(p, '#s-tree tr.lv3'); must(c3 === 'rgb(24, 34, 44)' && new Set([c1, c2, c3]).size === 3, `小項 ${c3}`)
+    must(/rgb\(111, 147, 181\)/.test(await bar(p, '#s-tree tr.lv3')), '小項沒有內側細條：' + await bar(p, '#s-tree tr.lv3'))
     must(lum(c2) > lum(c1) - 12 && lum(c3) < lum(c2), '色階順序：' + [c1, c2, c3].join(' / '))
     const m = await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth); must(m, '不該橫向捲動')
     await p.context().close()

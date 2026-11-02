@@ -898,6 +898,72 @@ async function reportList(code: string): Promise<Reply> {
     requests, current_request: requests ? requests.find((q) => q.status === 'QUEUED' || q.status === 'RUNNING') ?? null : null,
   })
 }
+/* ---- PDF 發布契約（PDF_PUBLICATION_CONTRACT.md，2026-11-02）----
+ * Codex 管線把「發布 metadata＋六類白名單章節純文字」放進報告的 summary（JSON，format 固定為下列字串）；
+ * 這裡 fail-closed 驗證：任何一項不符就整份不顯示，不退回把 JSON 當文字秀。沒有這個 format 的 summary 照舊當純文字。 */
+const PUB_FORMAT = 'kupei-report-publication/1'
+const PUB_SECTIONS: [string, string][] = [
+  ['short_term_check', '短期投資條件檢核'], ['valuation', '中心價位與本益比預估'], ['growth_driver', '主力成長動能'],
+  ['thesis_counter', '論點與反證'], ['limits', '資料限制與待確認事項'], ['report_info', '報告資訊與最新簽章'],
+]
+const SHA = /^[0-9a-f]{64}$/
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+function pickSignoff(x: any): Json | null {
+  if (!isObj(x)) return null
+  // 六個欄位都必須是非空白字串；result 不能是待簽
+  for (const k of ['role', 'signer', 'signed_at', 'report_version', 'evidence', 'result']) if (typeof x[k] !== 'string' || !x[k].trim()) return null
+  if (/待簽/.test(x.result)) return null
+  return { role: str(x.role, 40), signer: str(x.signer, 40), signed_at: str(x.signed_at, 40), report_version: str(x.report_version, 60), evidence: str(x.evidence, 80), result: str(x.result, 200) }
+}
+/** 回 null＝不是發布格式（當一般純文字）；{ error }＝是發布格式但驗證失敗；{ publication, sections } 通過 */
+function parsePublication(code: string, period: string, rev: string, text: string): Json | null {
+  const t = text.trim()
+  if (t[0] !== '{') return null
+  let j: any
+  try { j = JSON.parse(t) } catch { return null }
+  if (!isObj(j) || j.format !== PUB_FORMAT) return null
+  const bad = (why: string) => ({ error: why })
+  const m = j.publication
+  if (!isObj(m)) return bad('NO_METADATA')
+  for (const k of ['stock_id', 'company_name', 'report_period', 'report_version', 'generated_at', 'financial_period', 'score_period', 'pipeline_version'])
+    if (typeof m[k] !== 'string' || !m[k].trim()) return bad('MISSING_' + k)
+  if (m.stock_id !== code) return bad('STOCK_MISMATCH')
+  if (m.report_period !== period) return bad('PERIOD_MISMATCH')
+  if (!Number.isInteger(m.revision) || String(m.revision) !== rev) return bad('REVISION_MISMATCH')
+  for (const k of ['valuation_date', 'price_date', 'evidence_date']) if (typeof m[k] !== 'string' || !DAY.test(m[k])) return bad('BAD_' + k)
+  if (typeof m.evidence_sha256 !== 'string' || !SHA.test(m.evidence_sha256)) return bad('BAD_EVIDENCE_SHA')
+  if (typeof m.pdf_sha256 !== 'string' || !SHA.test(m.pdf_sha256)) return bad('BAD_PDF_SHA')
+  if (m.malware_scan_status !== 'PASSED') return bad('SCAN_NOT_PASSED')
+  if (m.publication_status !== 'PUBLISHED') return bad('NOT_PUBLISHED')
+  if (m.evidence_status !== 'OK' && m.evidence_status !== 'PARTIAL') return bad('BAD_EVIDENCE_STATUS')
+  if (!Array.isArray(m.partial_reasons) || m.partial_reasons.some((s: unknown) => typeof s !== 'string' || !s.trim())) return bad('BAD_PARTIAL_REASONS')
+  if (m.evidence_status === 'OK' && m.partial_reasons.length) return bad('OK_WITH_REASONS')
+  if (m.evidence_status === 'PARTIAL' && !m.partial_reasons.length) return bad('PARTIAL_WITHOUT_REASONS')
+  const claude = pickSignoff(m.claude_signoff), codex = pickSignoff(m.codex_signoff)
+  if (!claude || !codex) return bad('SIGNOFF_MISSING')
+  if (claude.report_version !== m.report_version || codex.report_version !== m.report_version) return bad('SIGNOFF_VERSION_MISMATCH')
+  if (!Array.isArray(j.sections)) return bad('NO_SECTIONS')
+  const seen = new Set<string>()
+  const byId: Record<string, string> = {}
+  for (const s of j.sections) {
+    // 白名單以外的章節或重複章節＝整份拒絕（不默默丟掉，避免漏審）
+    if (!isObj(s) || typeof s.id !== 'string' || !PUB_SECTIONS.some(([id]) => id === s.id) || seen.has(s.id)) return bad('BAD_SECTION')
+    if (typeof s.text !== 'string' || !s.text.trim()) return bad('EMPTY_SECTION')
+    seen.add(s.id); byId[s.id] = str(s.text, 20000)
+  }
+  if (PUB_SECTIONS.some(([id]) => !seen.has(id))) return bad('SECTION_MISSING')
+  return {
+    publication: {
+      stock_id: m.stock_id, company_name: str(m.company_name, 60), report_period: str(m.report_period, 20), revision: m.revision,
+      report_version: str(m.report_version, 60), generated_at: str(m.generated_at, 40), financial_period: str(m.financial_period, 40),
+      score_period: str(m.score_period, 40), valuation_date: m.valuation_date, price_date: m.price_date, evidence_date: m.evidence_date,
+      evidence_sha256: m.evidence_sha256, pdf_sha256: m.pdf_sha256, evidence_status: m.evidence_status,
+      partial_reasons: m.partial_reasons.slice(0, 20).map((s: string) => s.slice(0, 300)), pipeline_version: str(m.pipeline_version, 60),
+      claude_signoff: claude, codex_signoff: codex,
+    },
+    sections: PUB_SECTIONS.map(([id, title]) => ({ id, title, text: byId[id] })),
+  }
+}
 async function reportOne(code: string, period: string, rev: string): Promise<Reply> {
   // 契約的 rev 是正整數（client.report 收 number）
   if (!SAFE_SEG.test(period) || !/^\d{1,9}$/.test(rev)) return { ok: false, status: 400, data: { error_code: 'REPORT_NOT_FOUND' } }
@@ -905,8 +971,14 @@ async function reportOne(code: string, period: string, rev: string): Promise<Rep
   try { d = (await gated(code, 's-report', `report|${code}|${period}|${rev}`, () => client.report(code, period, Number(rev)))) as unknown as Json } catch (e) { return errReply(e, 'REPORT_NOT_FOUND') }
   const r = adaptReportItem(d)
   if (!r) return { ok: false, status: 502, data: { error_code: 'REPORT_NOT_FOUND' } }
-  // summary 原樣當純文字交給 UI（UI 跳脫後只把換行轉 <br>，不解析 markdown）
-  return ok({ ...r, summary: str(d.summary, 100000), pointer: { published_at: r.published_at }, meta: null })
+  // summary 原樣當純文字交給 UI（UI 跳脫後只把換行轉 <br>，不解析 markdown）；發布契約格式則先驗證，通過才給章節
+  const text = str(d.summary, 100000)
+  const pub = parsePublication(code, period, rev, text)
+  if (pub) {
+    if ('error' in pub) return ok({ ...r, summary: '', publication_error: pub.error, pointer: { published_at: r.published_at }, meta: null })
+    return ok({ ...r, summary: '', ...pub, pointer: { published_at: r.published_at }, meta: null })
+  }
+  return ok({ ...r, summary: text, pointer: { published_at: r.published_at }, meta: null })
 }
 async function requestReport(code: string, body: any): Promise<Reply> {
   const period = typeof body?.period === 'string' && SAFE_SEG.test(body.period) ? body.period : null

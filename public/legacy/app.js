@@ -923,7 +923,7 @@ function sRender(){
   }else if(C.tree&&C.tree.length){
     C.tree.forEach(function(n,k){
       var key=n.id;
-      b+='<tr class="lv1">'+itemCell(n,1,key,k)+'<td class="c2">'+treeScore(n)+'</td><td class="c3 note">'+treeNote(n,1,key,C)+'</td></tr>';
+      b+='<tr class="lv1'+(SP.open[key]?' open':'')+'">'+itemCell(n,1,key,k)+'<td class="c2">'+treeScore(n)+'</td><td class="c3 note">'+treeNote(n,1,key,C)+'</td></tr>';
       if(SP.open[key])n.c.forEach(function(m){
         var k2=key+'/'+m.id;
         b+='<tr class="lv2">'+itemCell(m,2,k2)+'<td class="c2">'+treeScore(m)+'</td><td class="c3 note">'+treeNote(m,2,k2,C)+'</td></tr>';
@@ -1520,6 +1520,30 @@ function mdHtml(md,toc){
   if(inList)out.push('</ul>');
   return out.join('');
 }
+/* PDF 發布契約顯示（bridge 已驗證；這裡只負責排版，全部以純文字跳脫輸出）。新聞摘要是獨立內容，不是報告章節 */
+var PUB_ERR={NOT_PUBLISHED:'這份報告的發布狀態不是「已發布」',SCAN_NOT_PASSED:'掃毒結果不是通過',SIGNOFF_MISSING:'缺少 Claude 或 Codex 的最新簽章（或仍是待簽）',STOCK_MISMATCH:'報告的公司代號與網址不符',REVISION_MISMATCH:'報告版次與網址不符',PERIOD_MISMATCH:'報告期別與網址不符',SIGNOFF_VERSION_MISMATCH:'簽章的報告版本與報告不一致',BAD_SECTION:'含有白名單以外或重複的章節',SECTION_MISSING:'白名單章節不齊全',EMPTY_SECTION:'有章節沒有內容',OK_WITH_REASONS:'證據包狀態為 OK 但仍列有缺漏項目',PARTIAL_WITHOUT_REASONS:'證據包狀態為 PARTIAL 卻沒有缺漏項目'};
+function pubErrText(code){return (PUB_ERR[code]||'發布資料格式或欄位不符')+'（'+code+'）';}
+function pubSign(label,s){return '<tr><td>'+esc(label)+'</td><td>'+esc(s.signer||'—')+'</td><td>'+esc(s.signed_at||'—')+'</td><td>'+esc(s.report_version||'—')+'</td><td>'+esc(s.evidence||'—')+'</td><td>'+esc(s.result)+'</td></tr>';}
+function pubHtml(d){
+  var m=d.publication,partial=m.evidence_status==='PARTIAL',h='';
+  if(partial)h+='<div class="limits" style="border:1px solid var(--warn);border-radius:6px;padding:8px;margin-bottom:8px"><b>資料不完整（PARTIAL）</b>：這份報告的資料來源有缺漏，缺漏的欄位維持空值，沒有以其他方法補成 KuPei 正式結果；已取得的數字已完成複查。<ul>'+m.partial_reasons.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul></div>';
+  h+='<div class="sub" style="margin-bottom:6px">以本機產生並掃毒通過的 PDF 為母檔；此處只顯示白名單章節的純文字，不構成買賣建議，模型分數與估價供篩選及分析參考。</div>';
+  d.sections.forEach(function(s){
+    h+='<h2 id="rh-'+esc(s.id)+'">'+esc(s.title)+'</h2><p class="rep-text">'+esc(s.text).replace(/\r?\n/g,'<br>')+'</p>';
+    if(s.id==='report_info'){
+      h+='<table class="tree" style="font-size:12px;margin:6px 0"><tbody>'+
+        [['公司',m.stock_id+' '+m.company_name],['報告期別／版次',m.report_period+'／第 '+m.revision+' 版'],['報告版本',m.report_version],['產生時間',tpTime(m.generated_at)],['財報期間',m.financial_period],['評分期間',m.score_period],['估價日',m.valuation_date],['價格日',m.price_date],['證據包日期',m.evidence_date],['證據包狀態',partial?'PARTIAL（資料不完整）':'OK'],['證據包 SHA-256',m.evidence_sha256.slice(0,16)+'…'],['PDF SHA-256',m.pdf_sha256.slice(0,16)+'…'],['管線版本',m.pipeline_version]].map(function(r){return '<tr><td>'+esc(r[0])+'</td><td>'+esc(r[1])+'</td></tr>';}).join('')+'</tbody></table>'+
+        '<table class="tree" style="font-size:12px;margin:6px 0"><thead><tr><td>角色</td><td>簽章者</td><td>時間</td><td>報告版本</td><td>證據包</td><td>結果</td></tr></thead><tbody>'+pubSign('報告產生',m.claude_signoff)+pubSign('數字複查',m.codex_signoff)+'</tbody></table>';
+    }
+  });
+  h+='<h2 id="rh-news">相關新聞摘要</h2><div class="sub">獨立於報告之外，不在 PDF 內，也不是報告章節；只列核准來源的標題、RSS 摘要與連結，不保存新聞全文。載入失敗不影響上方報告。</div><div id="r-news"></div>';
+  return h;
+}
+function pubNewsHtml(id){
+  if(!NEWS_ON||!groupOf(id))return '<span class="placeholder">此公司不在自選群組，沒有個股新聞。</span>';
+  var c=cached(NC,'s|'+id+'|'+ymdOff(0),'/news/stock/'+encodeURIComponent(id)+'?date='+ymdOff(0)+'&days=5',function(){var e=$('r-news');if(e&&curPage==='report')e.innerHTML=pubNewsHtml(id);});
+  return '<div class="sub">近 5 日｜主題詞：'+esc(topicsText(id))+'</div>'+newsList(c,5,false);
+}
 var _rRender=rRender;
 rRender=function(id){
   _rRender(id);
@@ -1540,6 +1564,17 @@ rRender=function(id){
     /* Pages：summary 一律當純文字（跳脫後只把換行轉 <br>，不解析 markdown）；連結只放 https */
     $('r-sub').textContent=p+'｜'+rev+(REP_ST[d.status]||'')+'｜產生 '+tpTime(pt.published_at)+'｜'+(d.title||'—');
     var fl=(d.files||[]).map(function(f){return '<li>'+(safeUrl(f.url)!=='#'?'<a href="'+esc(safeUrl(f.url))+'" target="_blank" rel="noopener noreferrer">'+esc(f.name)+'</a>':esc(f.name))+'</li>';}).join('');
+    if(d.publication_error){
+      $('r-body').innerHTML='<div class="placeholder">這份報告的發布資料未通過驗證，已停止顯示：'+esc(pubErrText(d.publication_error))+'。請回報給維護者。</div>';
+      $('r-toc').innerHTML='<span class="placeholder">無章節</span>';return;
+    }
+    if(d.publication){
+      $('r-sub').textContent=p+'｜第 '+rev+' 版｜'+(d.publication.evidence_status==='PARTIAL'?'資料不完整（PARTIAL）｜':'')+'產生 '+tpTime(d.publication.generated_at);
+      $('r-body').innerHTML=pubHtml(d);
+      $('r-toc').innerHTML=d.sections.map(function(s){return '<a href="#" data-rtoc="rh-'+esc(s.id)+'">'+esc(s.title)+'</a>';}).join('')+'<a href="#" data-rtoc="rh-news">相關新聞摘要</a>';
+      var ne=$('r-news');if(ne)ne.innerHTML=pubNewsHtml(id);
+      return;
+    }
     var ruleRep=/規則式/.test(d.title||'')||/REPORT_RULE_V\d/.test(d.summary||'');
     $('r-body').innerHTML=(ruleRep?'<div class="sub" style="margin-bottom:6px">這份報告由規則式管線依正式發布資料整理，<b>不是 AI 撰寫</b>，也不構成買賣建議；參考檔只列檔名與雜湊、內容未解析；若要求前期比較但資料缺少，報告會寫明、不自行推算。</div>':'')+'<div style="border:1px solid var(--line);border-radius:6px;padding:8px"><b>摘要</b><p class="rep-text">'+(d.summary?esc(d.summary).replace(/\r?\n/g,'<br>'):'—')+'</p></div>'+
       (safeUrl(d.url)!=='#'?'<p><a href="'+esc(safeUrl(d.url))+'" target="_blank" rel="noopener noreferrer">開啟完整報告</a></p>':'')+

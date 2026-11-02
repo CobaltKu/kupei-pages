@@ -51,6 +51,7 @@ UI 不重算任何分數、名次或 Gate；後端沒有交付的資料顯示「
 - `tests/e2e_pages_news_precise.mjs`：產業與個股新聞精準查詢（NEWS-03／04／05，後端 `/api/news` 用假的回應），21 項（桌機＋手機）：產業組送 `kind=industry`、不足 2 個詞不送請求；個股送 `kind=stock`，名稱／代號分開傳、主題詞去掉名稱代號、最多 10 個、沒有主題詞不送請求；顯示命中詞（兩條收入分支）、實際媒體與抓取來源；400 `NOT_ENOUGH_KEYWORDS` 不退回舊版 OR；空狀態與 `partial` 說明；科技新報可停用、Google／Bing 只列出；個股新聞的快取依代號分開。
 - `tests/e2e_pages_report_settings.mjs`：報告設定串接 REPORT-01（後端 `/api/reports/*` 用假的回應），15 項：產生報告帶設定快照（關鍵字、納入新聞、比較、重點大項、勾選的參考檔）、關鍵字不足 2 個不能產生或建立排程、排程 once／daily／weekly 的本文、列表「下次約…之後排入」（非準點）、刪除、QUOTA_EXCEEDED／BAD_REQUEST 訊息、請求清單的版次與手動／排程、報告全文仍是純文字。
 - `tests/e2e_pages_release_wording.mjs`：正式版本文案（C-09），7 項：首頁橫幅、頁尾、說明頁、狀態頁與個股頁採用正式版本稱呼，保留「模型效度持續驗證中、不是投資建議」，README 同步。
+- `tests/e2e_pages_pdf_publication.mjs`：PDF 發布契約（2026-11-02）：報告 summary 內的 `kupei-report-publication/1` 發布資料與六類白名單章節；OK／PARTIAL 顯示與缺漏警示、各種不合格資料整份不顯示（fail-closed）、純文字跳脫、新聞摘要獨立且失敗不影響報告、舊純文字報告照舊、簽章欄位／版本與期別一致性，27 項。`BASE=http://127.0.0.1:5173/ node tests/e2e_pages_pdf_publication.mjs`
 - `tests/e2e_pages_mobile.mjs`：手機預檢（iPhone SE／14／Pro Max 寬度，模擬 iOS Safari），33 項：登入畫面與 9 個頁面不橫向捲動、無 JS 錯誤、輸入框字級 ≥16px（避免 iOS 點進去自動放大），帳號視窗（改密碼展開）不超出畫面。實機 iPhone 仍須人工看。
 - `tests/e2e_pages_account.mjs`：用假的帳號端點測沒有註冊（登入畫面與帳號視窗都沒有建立帳號、不打 `/api/auth/config`、`/register`）與改密碼，4 項；不建立真實帳號。
 - `tests/e2e_pages_account2.mjs`：用假的帳號與雲端文件端點測「忘記密碼」（登入畫面連結切換、欄位驗證、重設碼錯 401 的訊息、成功後已登入且 `kupei:session` 換新並提示其他裝置已登出）與「匯入舊的寫入權杖資料」（權杖錯、沒有資料可匯入、摘要與確認後寫進帳號雲端、本機換新且 `kupei3_*_prev` 有備份、409 重讀版本重試一次、額度已滿不重試、權杖不進網址與 storage），13 項；不建立真實帳號。`SHOTS=<資料夾>` 另存截圖。
