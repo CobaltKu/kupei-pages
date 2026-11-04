@@ -690,6 +690,8 @@ function hSelect(id){
   if(prev){var p=$('hr-'+prev);if(p)p.classList.remove('sel');}
   if(HS.sel){var e=$('hr-'+HS.sel);if(e)e.classList.add('sel');}
 }
+/* 把 el 捲到清單容器（手機 #h-mlist、桌機 #h-wrap）的中間；只設容器的 scrollTop，不動視窗或外層容器 */
+function hScrollTo(el){var host=isM()?$('h-mlist'):$('h-wrap');if(!host||!el)return;var hr=host.getBoundingClientRect(),er=el.getBoundingClientRect();host.scrollTop+=(er.top-hr.top)-(host.clientHeight-er.height)/2;}
 function hJump(){
   var q=$('h-q').value.trim().toLowerCase();if(!q)return;
   var all=ROWS.filter(function(r){return r.id.toLowerCase().indexOf(q)>=0||r.name.toLowerCase().indexOf(q)>=0;});
@@ -701,7 +703,7 @@ function hJump(){
   if(!hit){var f=all[0];$('h-msg').textContent=f.id+' '+f.name+(f.fin?'：本模型不適用金融保險業':(HS.hideTrend&&isTrend(f)?'：已被「隱藏趨勢惡化需複核」篩掉':'：已被「隱藏資格否決」篩掉'));return;}
   $('h-msg').textContent=exact||shown.length<2?'':'找到 '+shown.length+' 筆，已跳到第一筆：'+hit.id+' '+hit.name;HS.flash=hit.id;
   var pre=isM()?'mr-':'hr-';if(isM())MX.open[hit.id]=true;
-  function go(){var el=$(pre+hit.id);if(el)el.scrollIntoView({block:'center'});clearTimeout(HS.flashT);HS.flashT=setTimeout(function(){HS.flash=null;var e=$(pre+hit.id);if(e)e.classList.remove('flash');},1600);} /* 連續搜尋：上一次的計時器不能提早清掉這次的標示 */
+  function go(){var el=$(pre+hit.id);if(el)hScrollTo(el);clearTimeout(HS.flashT);HS.flashT=setTimeout(function(){HS.flash=null;var e=$(pre+hit.id);if(e)e.classList.remove('flash');},1600);} /* 連續搜尋：上一次的計時器不能提早清掉這次的標示 */
   var cur=HS.done===hTok&&$(pre+hit.id);
   if(cur){if(isM())cur.outerHTML=mRow(hit);var el=$(pre+hit.id);el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');go();}
   else hRender(go);
@@ -758,6 +760,16 @@ function reRender(id){
   var one=isM()&&id&&$('mr-'+id);
   if(one){
     one.outerHTML=mRow(BYID[id]);return;
+  }
+  /* 桌機同理：全市場清單已畫完且該列在畫面上時只換單列（整表重畫會先縮成 120 列，捲動位置被夾回上方）。
+     重用快取（HR.sig／HS.sig）只在「除了自選群組以外都沒變」時才保持有效，否則清掉讓下次排序整表重畫。 */
+  var tr=!isM()&&id&&BYID[id]&&HS.done===hTok?$('hr-'+id):null;
+  if(tr){
+    var gl=JSON.stringify(W.groups).length,rowOk=!!(HR.sig&&HR.nodes&&HR.nodes[id]===tr&&HR.sig.indexOf(hRowSig().slice(0,-gl))===0),sigOk=!!(HS.sig&&HS.sig.indexOf(hSig().slice(0,-gl))===0);
+    var t=document.createElement('tbody');t.innerHTML=hRow(BYID[id]);var nt=t.firstChild;tr.replaceWith(nt);
+    if(HR.nodes&&HR.nodes[id])HR.nodes[id]=nt;
+    HR.sig=rowOk?hRowSig():null;if(sigOk)HS.sig=hSig();
+    return;
   }
   hRender();
 }
