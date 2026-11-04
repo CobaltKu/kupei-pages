@@ -292,6 +292,14 @@ export interface LiveStatus {
   /** 最近一次處理耗時（毫秒，牆上時間，含等 FinMind；不是 CPU time） */
   lastDurationMs?: number | null
   lastCount?: number | null
+  /** 每日收盤補抓（MARKET-06）：最近一次執行時間（交易日 15:30、16:00） */
+  closeRetryAt?: string | null
+  /** 那次的結果，例 "L:ok O:ok"、"O:wait"；兩市場早已齊全＝"done" */
+  closeRetryResult?: string | null
+  /** FinMind 4xx 後退避到何時（這之前不補抓） */
+  closeRetryBlockedUntil?: string | null
+  /** 最近一次補進新行情的時間 */
+  closeRetryWrittenAt?: string | null
   nextAlarmAt?: string | null
   snapshotAt?: string | null
   snapshotCount?: number | null

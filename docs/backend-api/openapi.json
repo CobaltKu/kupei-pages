@@ -504,6 +504,61 @@
           },
           "live": {
             "$ref": "#/components/schemas/LiveStatus"
+          },
+          "alerts": {
+            "type": "array",
+            "description": "行情逾時告警（MARKET-06，2026-11-04，相容新增）：最近 20 筆，新到舊。交易日盤中 09:20～13:30 每 10 分鐘檢查：MIS 盤中快照超過 20 分鐘沒更新開 mis-stale（只記錄）；MIS 與 FinMind 盤中 30 秒都超過 20 分鐘沒更新開 market-outage（後端寄 Email 給維運）。同一事件只有一筆，恢復時 status 變 resolved。伺服器快取最多 60 秒",
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "status",
+                "openedAt",
+                "resolvedAt",
+                "message",
+                "notifiedAt"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "mis-stale＝MIS 盤中快照逾時（FinMind 可能正常）；market-outage＝FinMind 與 MIS 都逾時。之後可能新增種類，不認得的請當一般告警顯示",
+                  "example": "market-outage"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "resolved"
+                  ]
+                },
+                "openedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "開始時間（UTC ISO 8601）"
+                },
+                "resolvedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true,
+                  "description": "恢復時間（UTC ISO 8601）；open 時是 null"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "原因（給人看的中文）；恢復後在後面接「｜恢復 HH:MM：…」"
+                },
+                "notifiedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true,
+                  "description": "已寄出 Email 通知的時間；null＝沒有通知（mis-stale 不通知，或還沒寄成功）"
+                }
+              }
+            }
           }
         }
       },
@@ -1505,6 +1560,26 @@
             "type": "string",
             "nullable": true,
             "description": "最近一次收盤快照（13:36～13:50）成功的時間（UTC）；台灣日期＝今天＝今天的收盤快照已抓到（MARKET-05）"
+          },
+          "closeRetryAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "每日收盤補抓（交易日 15:30、16:00）最近一次執行的時間（UTC，MARKET-06）"
+          },
+          "closeRetryResult": {
+            "type": "string",
+            "nullable": true,
+            "description": "那次的結果，例 \"L:ok O:ok\"、\"O:wait\"；兩市場早已齊全＝\"done\"（MARKET-06）"
+          },
+          "closeRetryBlockedUntil": {
+            "type": "string",
+            "nullable": true,
+            "description": "補抓遇到 FinMind 4xx 後，這個時間（UTC）之前不再打（MARKET-06）"
+          },
+          "closeRetryWrittenAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "補抓最近一次寫進新行情的時間（UTC，MARKET-06）"
           }
         }
       },
