@@ -114,6 +114,48 @@ for (const [nm, w, h] of [['iPhone SE', 375, 667], ['iPhone 14', 390, 844], ['iP
     await p.context().close(); return id
   })
 }
+// ---- C-13（2026-11-09 再修）：手機首頁只有一條捲動路徑、外層不可被推走；重新整理只顯示圖示 ----
+for (const [nm, w, h] of [['iPhone SE', 375, 667], ['iPhone 14', 390, 844], ['iPhone Pro Max', 430, 932]]) {
+  const opts = { viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: UA }
+  await check(`${nm}｜首頁單一捲動路徑：只有 #h-mlist 可捲，外層被程式或聚焦推動後搜尋框仍在原位`, async () => {
+    const p = await open(opts, '#h-mlist .mrow')
+    const sc = await p.evaluate(() => [...document.querySelectorAll('html,body,.app,main,#pg-home,#pg-home *')].filter((e) => { const o = getComputedStyle(e).overflowY; return (o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 1 && e.getBoundingClientRect().width > 0 }).map((e) => e.id || e.tagName))
+    must(sc.length === 1 && sc[0] === 'h-mlist', '可捲動元素應只有 h-mlist：' + sc.join(','))
+    // 模擬瀏覽器自動捲動：直接設外層 scrollTop、對頁尾與清單呼叫 scrollIntoView、鍵盤縮小可視高度後聚焦搜尋框
+    await p.setViewportSize({ width: w, height: Math.round(h * 0.62) })
+    await p.evaluate(() => {
+      document.querySelector('main').scrollTop = 300; document.getElementById('pg-home').scrollTop = 300; window.scrollTo(0, 300)
+      document.getElementById('h-mfoot').scrollIntoView(); document.getElementById('h-mlist').lastElementChild?.scrollIntoView(); document.getElementById('h-q').focus()
+    })
+    await p.waitForTimeout(400)
+    await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(400)
+    const m = await p.evaluate(() => { const q = document.getElementById('h-q').getBoundingClientRect(); const anc = []; for (let e = document.getElementById('h-q'); e; e = e.parentElement) if (e.scrollTop) anc.push((e.id || e.tagName) + ':' + e.scrollTop); return { anc, top: q.top, bottom: q.bottom, sy: window.scrollY, ih: innerHeight } })
+    must(!m.anc.length && m.sy === 0, `外層仍被捲動：${m.anc.join(', ')} scrollY=${m.sy}`)
+    must(m.top >= 0 && m.bottom <= m.ih, `搜尋框不在可視範圍：${m.top}～${m.bottom}／${m.ih}`)
+    // 清單深處任何位置，搜尋框一直在畫面上、清單自己可以回到頂端
+    await p.evaluate(() => { document.getElementById('h-mlist').scrollTop = 99999 }); await p.waitForTimeout(200)
+    must(await p.evaluate(() => { const q = document.getElementById('h-q').getBoundingClientRect(); return q.top >= 0 && q.bottom <= innerHeight }), '清單捲到底後搜尋框不見了')
+    await p.evaluate(() => { document.getElementById('h-mlist').scrollTop = 0 })
+    must(await p.evaluate(() => document.getElementById('h-mlist').scrollTop === 0), '清單回不到頂端')
+    await p.context().close()
+  })
+  await check(`${nm}｜重新整理按鈕只顯示圖示：有 aria-label／title、觸控範圍 ≥44px、點了會重新載入`, async () => {
+    const p = await open(opts, '#h-mlist .mrow')
+    const m = await p.evaluate(() => { const e = document.getElementById('h-refresh'), r = e.getBoundingClientRect(); return { text: e.textContent.trim(), label: e.getAttribute('aria-label'), title: e.title, svg: !!e.querySelector('svg'), w: r.width, h: r.height, vis: r.width > 0 && r.top >= 0 && r.bottom <= innerHeight && r.right <= innerWidth } })
+    must(m.text === '' && m.svg, `應只有圖示：text="${m.text}" svg=${m.svg}`)
+    must(m.label === '重新整理' && m.title === '重新整理', `aria-label／title：${m.label}／${m.title}`)
+    must(m.w >= 44 && m.h >= 44, `觸控範圍 ${m.w}×${m.h}`); must(m.vis, '按鈕不在可視範圍')
+    await Promise.all([p.waitForNavigation({ timeout: 15000 }), p.click('#h-refresh')])
+    await p.context().close()
+  })
+}
+await check('桌機 1440：重新整理只顯示圖示，有 aria-label／title，點了會重新載入', async () => {
+  const p = await open({ viewport: { width: 1440, height: 900 } }, '#h-body tr[id^="hr-"]')
+  const m = await p.evaluate(() => { const e = document.getElementById('h-refresh'), r = e.getBoundingClientRect(); return { text: e.textContent.trim(), label: e.getAttribute('aria-label'), title: e.title, svg: !!e.querySelector('svg'), w: r.width, h: r.height } })
+  must(m.text === '' && m.svg && m.label === '重新整理' && m.title === '重新整理', JSON.stringify(m)); must(m.w >= 26 && m.h >= 26, `按鈕太小 ${m.w}×${m.h}`)
+  await Promise.all([p.waitForNavigation({ timeout: 15000 }), p.click('#h-refresh')])
+  await p.context().close()
+})
 await b.close()
 for (const e of [...new Set(errs)]) results.push(['FAIL', '瀏覽器錯誤', e])
 for (const [s, n, note] of results) console.log(s + '  ' + n + (note ? '｜' + note : ''))

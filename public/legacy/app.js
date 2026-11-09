@@ -690,6 +690,10 @@ function hSelect(id){
   if(prev){var p=$('hr-'+prev);if(p)p.classList.remove('sel');}
   if(HS.sel){var e=$('hr-'+HS.sel);if(e)e.classList.add('sel');}
 }
+/* 手機首頁只有 #h-mlist 會捲動；外層（main、頁面、window）被瀏覽器自動捲動（例如 iOS 輸入框聚焦）時歸零，搜尋框才永遠回得去 */
+function hHomeTop(){if(!isM()||curPage!=='home')return;[document.querySelector('main'),$('pg-home'),document.scrollingElement,document.body].forEach(function(e){if(e&&e.scrollTop)e.scrollTop=0;});if(window.scrollY)window.scrollTo(0,0);}
+(function(){var m=document.querySelector('main'),pg=$('pg-home');if(m)m.addEventListener('scroll',hHomeTop,{passive:true});if(pg)pg.addEventListener('scroll',hHomeTop,{passive:true});window.addEventListener('scroll',hHomeTop,{passive:true});
+  $('h-q').addEventListener('blur',function(){setTimeout(hHomeTop,50);});if(window.visualViewport)window.visualViewport.addEventListener('resize',function(){setTimeout(hHomeTop,50);});})();
 /* 把 el 捲到清單容器（手機 #h-mlist、桌機 #h-wrap）的中間；只設容器的 scrollTop，不動視窗或外層容器 */
 function hScrollTo(el){var host=isM()?$('h-mlist'):$('h-wrap');if(!host||!el)return;var hr=host.getBoundingClientRect(),er=el.getBoundingClientRect();host.scrollTop+=(er.top-hr.top)-(host.clientHeight-er.height)/2;}
 function hJump(){
@@ -703,7 +707,7 @@ function hJump(){
   if(!hit){var f=all[0];$('h-msg').textContent=f.id+' '+f.name+(f.fin?'：本模型不適用金融保險業':(HS.hideTrend&&isTrend(f)?'：已被「隱藏趨勢惡化需複核」篩掉':'：已被「隱藏資格否決」篩掉'));return;}
   $('h-msg').textContent=exact||shown.length<2?'':'找到 '+shown.length+' 筆，已跳到第一筆：'+hit.id+' '+hit.name;HS.flash=hit.id;
   var pre=isM()?'mr-':'hr-';if(isM())MX.open[hit.id]=true;
-  function go(){var el=$(pre+hit.id);if(el)hScrollTo(el);clearTimeout(HS.flashT);HS.flashT=setTimeout(function(){HS.flash=null;var e=$(pre+hit.id);if(e)e.classList.remove('flash');},1600);} /* 連續搜尋：上一次的計時器不能提早清掉這次的標示 */
+  function go(){var el=$(pre+hit.id);if(el)hScrollTo(el);hHomeTop();clearTimeout(HS.flashT);HS.flashT=setTimeout(function(){HS.flash=null;var e=$(pre+hit.id);if(e)e.classList.remove('flash');},1600);} /* 連續搜尋：上一次的計時器不能提早清掉這次的標示 */
   var cur=HS.done===hTok&&$(pre+hit.id);
   if(cur){if(isM())cur.outerHTML=mRow(hit);var el=$(pre+hit.id);el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');go();}
   else hRender(go);
