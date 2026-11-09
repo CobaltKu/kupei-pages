@@ -318,18 +318,23 @@ main{position:relative}
 .mnews .body,.mbasis .body{padding:0 10px 10px;display:flex;flex-direction:column;gap:6px}
 .mbasis .body{font-family:"IBM Plex Mono",Consolas,monospace;font-size:11px;color:var(--faint);line-height:1.6}
 @media (max-width:720px){
-  .app{flex-direction:column}
+  html,body{height:100%;height:100dvh;overflow:hidden}
+  .app{flex-direction:column;height:100%;height:100dvh;overflow:hidden}
   .rail{position:fixed;left:0;right:0;bottom:0;width:auto;height:calc(58px + env(safe-area-inset-bottom));flex-direction:row;justify-content:space-around;align-items:center;padding:4px 4px env(safe-area-inset-bottom);border-right:0;border-top:1px solid var(--line);z-index:70;gap:0}
   .rail .logo,.rail .spacer{display:none}
   .railbtn{width:48px;height:46px}
   .railbtn .tip{display:none !important}
-  main{padding:10px 10px calc(68px + env(safe-area-inset-bottom))}
+  main{height:100%;height:100dvh;padding:calc(10px + env(safe-area-inset-top)) 10px calc(68px + env(safe-area-inset-bottom));overflow:hidden}
+  header.ph{flex:0 0 auto}
   .show-m{display:inline-flex !important}
   #h-wrap,#w-wrap{display:none}
   .mlist{display:flex}
   #h-basis{display:none}
   .srch .inp{width:120px}
-  .tabs{flex-wrap:nowrap;overflow-x:auto}
+  .tabs{flex:0 0 auto;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs .tab{flex:0 0 auto;white-space:nowrap}
+  .tabs .tabmore{flex:0 0 auto;white-space:nowrap}
   .split>.left{flex:0 0 auto}
   .split .tablewrap{overflow:visible}
   .split>.right{overflow:visible}
