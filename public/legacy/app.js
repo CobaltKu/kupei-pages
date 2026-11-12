@@ -976,6 +976,8 @@ function sValRender(id){
   bf.forEach(function(c){var t=tr1(c);if(seen[t])return;seen[t]=1;f.push('<span class="flag" title="'+esc(c)+'">'+esc(t)+'</span>');});
   if(!VAL.on)f.push('<span class="placeholder">估價尚未提供。</span>');else if(o.vst&&o.vst!=='OK')f.push('<span class="placeholder" title="'+esc(o.vst)+'">此公司估價'+(o.vst==='PARTIAL'?'只提供中心值，不提供上下限與數據上限':o.vst==='NOT_APPLICABLE'?'不適用':'不可得')+(rc.length?'：'+trHtml(rc):'')+'。</span>');
   if(!QT.on)f.push('<span class="placeholder">行情尚未接上。</span>');else if(VAL.on)f.push('<span class="placeholder">安全邊際依'+(PAGES?(QT.live?'FinMind 盤中價':QT.close?'FinMind 收盤快照價（正式收盤待更新）':QT.intra?'證交所盤中快照價':'最近收盤價'):'即時股價')+'計算，與規格書以估價基準日收盤價計算的數值不同。</span>');
+  /* 2026-11-11 CoKu 核定：估價判讀提醒（回測顯示安全邊際只能辨識偏貴，中心值不是目標價） */
+  if(VAL.on&&o.typ!=null)f.push('<span class="placeholder" id="s-vread">安全邊際是偏貴警示，不是買進訊號，正值不代表會上漲；中心值是模型估算，不是目標價。</span>');
   $('s-flags').innerHTML=f.join('');
 }
 

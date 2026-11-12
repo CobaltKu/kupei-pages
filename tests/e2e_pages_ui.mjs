@@ -151,6 +151,19 @@ await check('狀態頁、說明頁、報告與新聞設定：不顯示內部備�
   await p.context().close(); return ''
 })
 
+/* 估價判讀提醒（2026-11-11 CoKu 核定）：有中心值的個股頁與說明頁都要出現 */
+await check('估價判讀提醒：個股頁與說明頁顯示「偏貴警示／不是目標價」', async () => {
+  const want = /安全邊際是偏貴警示，不是買進訊號.*中心值是模型估算，不是目標價/
+  const p = await open('#/stock/2330/home'); await waitVal(p)
+  must(want.test(await p.innerText('#s-vread')), '個股頁沒有判讀提醒')
+  must(await p.locator('#s-vread').evaluate((x) => x.scrollWidth <= x.clientWidth + 1), '個股頁判讀提醒被截斷')
+  await go(p, '#/help')
+  must(want.test(await p.innerText('#hp-vread')), '說明頁沒有判讀提醒')
+  const m = await open('#/stock/2330/home', { width: 390, height: 844 }); await waitVal(m)
+  must(await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), '手機個股頁出現水平捲動')
+  must(want.test(await m.innerText('#s-vread')), '手機個股頁沒有判讀提醒')
+})
+
 await b.close()
 for (const e of [...new Set(errs)]) results.push(['FAIL', '瀏覽器錯誤', e])
 for (const [s, n, note] of results) console.log(s + '  ' + n + (note ? '｜' + note : ''))
