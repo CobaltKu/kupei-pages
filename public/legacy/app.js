@@ -66,7 +66,12 @@ function sim(id){
 function margin(o){return (o.typ!=null&&o.typ>0&&o.price!=null)?(o.typ-o.price)/o.typ*100:null;}
 // T3 PARTIAL（2026-10-24 CoKu 核定）：只有中心值，安全邊際加「*」標記
 function mgTxt(o,mg){return esc(pct(mg))+(o.part&&mg!=null?'<sup class="pmk" title="僅中心值：估價區間不完整或次序異常，不提供上下限">*</sup>':'');}
-function mgStyle(mg){return 'color:'+(mg==null?'var(--muted)':chgColor(mg));}
+/* U-1（2026-11-11 CoKu 核定，2026-11-12 回測複查通過）：安全邊際不依正負套漲跌色；只有落在全市場最低五分之一（最貴）者標警示色 */
+var MGC={v:-1,cut:null};
+function mgCut(){var v=typeof QT!=='undefined'?QT.v:0;if(MGC.v===v)return MGC.cut;var a=[];MARKET.forEach(function(r){var m=margin(sim(r.id));if(m!=null)a.push(m);});a.sort(function(x,y){return x-y;});MGC.v=v;MGC.cut=a.length>=50?a[Math.floor(a.length/5)-1]:null;return MGC.cut;}
+function mgColor(mg){if(mg==null)return 'var(--muted)';var c=mgCut();return c!=null&&mg<=c?'var(--warn)':'var(--text2)';}
+var MG_TIP='安全邊際是偏貴警示，不是買進訊號；警示色＝位於全市場最低五分之一（偏貴）';
+function mgStyle(mg){return 'color:'+mgColor(mg);}
 function gnHtml(o){if(o.gflag)return '<span class="gflag" title="'+esc(tr1(o.gflag))+'">'+(o.gflag==='IMPLIED_GROWTH_ABOVE_SEARCH_RANGE'?'&gt;300%':(o.gflag==='IMPLIED_GROWTH_BELOW_SEARCH_RANGE'?'&lt;−50%':'N/A'))+'</span>';return o.gn==null?'—':(o.gn*100).toFixed(1)+'%';}
 function hhmm(d){return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
 function chgColor(x){return x>0.005?'var(--up)':(x<-0.005?'var(--down)':'#8C959E');}
@@ -557,7 +562,7 @@ function hHead(){
     var st='right:'+jRight(i)+'px;min-width:'+j[2]+'px;width:'+j[2]+'px'+(i===0?';border-left:1px solid var(--line2)':'');
     if(j[0]==='add'){h+='<th class="jr" style="'+st+';text-align:center">自選</th>';return;}
     if(i===4&&HS.wide)st+=';border-left:2px solid #3A4149';
-    if(j[0])h+='<th class="jr'+(HS.key===j[0]?' on':'')+'" style="'+st+'"><button class="sortbtn" data-sort="'+j[0]+'" aria-label="依 '+j[1]+' 排序"><span class="lab">'+j[1]+'<span class="arrow">'+arrow(j[0])+'</span></span>'+(i===0?'':'')+'</button></th>';
+    if(j[0])h+='<th class="jr'+(HS.key===j[0]?' on':'')+'" style="'+st+'"><button class="sortbtn" data-sort="'+j[0]+'" aria-label="依 '+j[1]+' 排序"'+(j[0]==='margin'?' title="'+MG_TIP+'"':'')+'><span class="lab">'+j[1]+'<span class="arrow">'+arrow(j[0])+'</span></span>'+(i===0?'':'')+'</button></th>';
     else h+='<th class="jr" style="'+st+'">'+j[1]+'</th>';
   });
   $('h-head').innerHTML=h;
@@ -619,7 +624,7 @@ function hSig(){return [HS.key,HS.dir,HS.hideVeto,HS.hideTrend,!!HS.wide,isM(),E
 function hRender(done){
   HS.list=hSorted();HS.sig=hSig();HS.pxl=pxLabel();
   var key=HS.key;
-  $('h-sort').textContent=key==='total'?'排序：總名次':'排序：'+(key==='price'?pxLabel():key==='margin'?'安全邊際':MAJ[+key.slice(1)])+(HS.dir==='desc'?'，高 → 低':'，低 → 高');
+  $('h-sort').textContent=key==='total'?'排序：總名次':'排序：'+(key==='price'?pxLabel():key==='margin'?'安全邊際':MAJ[+key.slice(1)])+(HS.dir==='desc'?'，高 → 低':'，低 → 高')+(key==='margin'&&HS.dir==='desc'?'｜提醒：安全邊際是偏貴警示，不是買進訊號，正值不代表會上漲':'');
   $('h-reset').hidden=key==='total';
   $('h-err').hidden=!EX.fail;$('h-wrap').style.visibility=EX.fail?'hidden':'';$('h-mlist').style.visibility=EX.fail?'hidden':'';
   if(EX.fail){$('h-wrap').style.display='none';$('h-mlist').style.display='none';}else{$('h-wrap').style.display='';$('h-mlist').style.display='';}
@@ -667,7 +672,7 @@ function hUpdateQuotes(){
   var cq={},cm={};host.querySelectorAll(pq).forEach(function(td){cq[td.dataset.q||td.dataset.q2]=td;});host.querySelectorAll(pm).forEach(function(td){cm[td.dataset.m||td.dataset.m2]=td;});
   Object.keys(cq).forEach(function(id){
     var o=sim(id),mg=margin(o),k=qcKey(o,mg);if(QC[id]===k)return;QC[id]=k;
-    cq[id].innerHTML=pxHtml(o);var td=cm[id];if(td){td.innerHTML=mgTxt(o,mg);td.style.color=mg==null?'var(--muted)':chgColor(mg);}
+    cq[id].innerHTML=pxHtml(o);var td=cm[id];if(td){td.innerHTML=mgTxt(o,mg);td.style.color=mgColor(mg);}
   });
   HS.sig=hSig();
   /* 重用的列全都在畫面上（沒有被篩掉的）才算已更新；否則下次排序整表重畫 */
@@ -825,7 +830,7 @@ function wUpdateQuotes(){
   if(WQ.stale!==EX.stale){wRender();return;}
   var host=isM()?$('w-mlist'):$('w-body');
   host.querySelectorAll('[data-wq]').forEach(function(el){var h=pxHtml(sim(el.dataset.wq));if(el.innerHTML!==h)el.innerHTML=h;});
-  host.querySelectorAll('[data-wm]').forEach(function(el){var o=sim(el.dataset.wm),mg=margin(o),h=mgTxt(o,mg);if(el.innerHTML!==h)el.innerHTML=h;el.style.color=EX.stale?'':(mg==null?'var(--muted)':chgColor(mg));});
+  host.querySelectorAll('[data-wm]').forEach(function(el){var o=sim(el.dataset.wm),mg=margin(o),h=mgTxt(o,mg);if(el.innerHTML!==h)el.innerHTML=h;el.style.color=EX.stale?'':mgColor(mg);});
   var miss=[];if(!QT.on)miss.push('行情');if(!VAL.on)miss.push('估價');if(HIST.on===false)miss.push('近 20 日與月營收');
   if(miss.length)return;var lg=PAGES?(QT.live?'FinMind 盤中價（約 30 秒更新）；安全邊際依該價格計算；資料來源：FinMind':QT.close?'正式收盤還沒到的市場暫用 FinMind 收盤快照；安全邊際依該價格計算；資料來源：FinMind':QT.intra?'證交所盤中快照（約 10 分鐘延遲，非逐筆即時）；安全邊際依該價格計算':'收盤價為每日收盤（非即時）；安全邊際依收盤價計算'):null;
   if(lg&&lg!==WQ.legend){$('w-legend3').textContent=lg;WQ.legend=lg;}
@@ -977,7 +982,7 @@ function sValRender(id){
   if(!VAL.on)f.push('<span class="placeholder">估價尚未提供。</span>');else if(o.vst&&o.vst!=='OK')f.push('<span class="placeholder" title="'+esc(o.vst)+'">此公司估價'+(o.vst==='PARTIAL'?'只提供中心值，不提供上下限與數據上限':o.vst==='NOT_APPLICABLE'?'不適用':'不可得')+(rc.length?'：'+trHtml(rc):'')+'。</span>');
   if(!QT.on)f.push('<span class="placeholder">行情尚未接上。</span>');else if(VAL.on)f.push('<span class="placeholder">安全邊際依'+(PAGES?(QT.live?'FinMind 盤中價':QT.close?'FinMind 收盤快照價（正式收盤待更新）':QT.intra?'證交所盤中快照價':'最近收盤價'):'即時股價')+'計算，與規格書以估價基準日收盤價計算的數值不同。</span>');
   /* 2026-11-11 CoKu 核定：估價判讀提醒（回測顯示安全邊際只能辨識偏貴，中心值不是目標價） */
-  if(VAL.on&&o.typ!=null)f.push('<span class="placeholder" id="s-vread">安全邊際是偏貴警示，不是買進訊號，正值不代表會上漲；中心值是模型估算，不是目標價。</span>');
+  if(VAL.on&&o.typ!=null)f.push('<span class="placeholder" id="s-vread">安全邊際是偏貴警示，不是買進訊號，正值不代表會上漲；中心值是模型估算，不是目標價。警示色表示安全邊際位於全市場最低五分之一（偏貴）。</span>');
   $('s-flags').innerHTML=f.join('');
 }
 
