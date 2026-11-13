@@ -61,8 +61,13 @@ var FID2NAME={};MJ.forEach(function(m){FID2NAME[m.id]=m.en;});
 function sim(id){
   var q=(typeof QT!=='undefined'&&QT.map[id])||null,v=(typeof VAL!=='undefined'&&VAL.on&&VAL.map[id])||null,ok=v&&v.status==='OK',part=v&&v.status==='PARTIAL';
   return {price:q&&q.status!=='REALTIME_UNAVAILABLE'?q.price:null,prev:q?q.prev_close:null,chgPct:q?q.change_pct:null,qst:q?q.status:null,qtime:q?q.source_time:null,
-    typ:ok||part?v.center:null,part:!!part,min:ok?v.lower:null,max:ok?v.upper:null,cap:ok?v.data_cap:null,gn:v?v.implied_growth:null,gflag:v?v.implied_growth_flag:null,flags:v?(v.flags||[]):[],vst:v?v.status:null};
+    typ:ok||part?v.center:null,part:!!part,min:ok?v.lower:null,max:ok?v.upper:null,cap:ok?v.data_cap:null,gn:v?v.implied_growth:null,gflag:v?v.implied_growth_flag:null,flags:v?(v.flags||[]):[],vst:v?v.status:null,rel:v?v.reliability_status||null:null,relf:v?(v.reliability_flags||[]):[]};
 }
+/* U-4（2026-11-11 CoKu 核定；契約 CL23_REMAINING_INPUT_AND_U4_ACCEPTANCE_20261113）：UNSTABLE_ROE／SHARE_COUNT_CHECK／SHORT_HISTORY 任一成立＝可靠度較低。
+   約半數有估價公司會命中，標記維持低調：表格只在中心值旁加淡色上標，個股頁才寫明原因 */
+function relLow(o){return o.typ!=null&&o.rel==='LOWER_RELIABILITY';}
+function relTip(o){return '可靠度較低'+(o.relf.length?'：'+o.relf.map(tr1).join('、'):'')+'。中心值參考性較低，解讀時宜保守。';}
+function ctrHtml(o){return fmt(o.typ)+(relLow(o)?'<sup class="rmk" title="'+esc(relTip(o))+'" aria-label="'+esc(relTip(o))+'">低</sup>':'');}
 function margin(o){return (o.typ!=null&&o.typ>0&&o.price!=null)?(o.typ-o.price)/o.typ*100:null;}
 // T3 PARTIAL（2026-10-24 CoKu 核定）：只有中心值，安全邊際加「*」標記
 function mgTxt(o,mg){return esc(pct(mg))+(o.part&&mg!=null?'<sup class="pmk" title="僅中心值：估價區間不完整或次序異常，不提供上下限">*</sup>':'');}
@@ -581,7 +586,7 @@ function hRow(r){
   if(!HS.wide){h+='<td class="vgrp first num">'+fmt(o.min)+'</td><td class="vgrp num">'+fmt(o.max)+'</td>';
   h+='<td class="vgrp num'+(over?' over':'')+'">'+fmt(o.cap)+'</td>';}
   h+='<td class="jr num'+(EX.stale?' stale':'')+'" data-q="'+rid+'" style="right:'+jRight(0)+'px;border-left:1px solid var(--line2)">'+pxHtml(o)+'</td>';
-  h+='<td class="jr num" style="right:'+jRight(1)+'px">'+fmt(o.typ)+'</td>';
+  h+='<td class="jr num" style="right:'+jRight(1)+'px">'+ctrHtml(o)+'</td>';
   h+='<td class="jr num'+(EX.stale?' stale':'')+'" data-m="'+rid+'" style="right:'+jRight(2)+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td>';
   h+='<td class="jr num" style="right:'+jRight(3)+'px">'+gnHtml(o)+'</td>';
   if(HS.wide){h+='<td class="jr num" style="right:'+jRight(4)+'px;border-left:2px solid #3A4149">'+fmt(o.min)+'</td><td class="jr num" style="right:'+jRight(5)+'px">'+fmt(o.max)+'</td><td class="jr num'+(over?' vgrp over':'')+'" style="right:'+jRight(6)+'px">'+fmt(o.cap)+'</td>';}
@@ -602,7 +607,7 @@ function majCell(m){if(m.st!=='TRIAL_SCORE'&&m.st!=='POLICY_SCORE'||m.s==null)re
 function mDetail(r,extra){
   var o=sim(r.id);
   var g='<div class="mgrid">'+r.maj.map(function(m,k){return '<div><span class="k">'+esc(MAJ[k])+'</span><span class="v num">'+majCell(m)+'</span><span class="r">'+(m.mr==null?'—':'名次 '+esc(m.mr))+'</span></div>';}).join('')+'</div>';
-  var v='<div class="mval">'+[['中心',fmt(o.typ)],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]].map(function(x){return '<div><span class="k">'+x[0]+'</span><span class="num">'+x[1]+'</span></div>';}).join('')+'</div>';
+  var v='<div class="mval">'+[['中心',ctrHtml(o)],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]].map(function(x){return '<div><span class="k">'+x[0]+'</span><span class="num">'+x[1]+'</span></div>';}).join('')+'</div>';
   return '<div class="mdet">'+v+g+(extra||'')+'</div>';
 }
 function mLine2(r){
@@ -805,7 +810,7 @@ function wRender(){
     b+='<tr id="wr-'+eid+'" class="'+(r.rank==null?'nd':'')+(WS.sel===id?' sel':'')+'" data-row="'+eid+'" draggable="true">';
     b+='<td class="fz" style="left:0;padding:0"><span class="handle" aria-hidden="true" title="拖曳調整順序">⋮⋮</span></td><td class="fz mono" style="left:28px"><button class="selbtn" data-wsel="'+eid+'" aria-label="標示此列">'+eid+'</button></td>';
     b+='<td class="fz" style="left:84px;border-right:1px solid var(--line2)"><button class="namelink" data-open="'+eid+'"><span class="nm">'+esc(r.name)+'</span></button><span style="color:var(--faint);font-size:11px;margin-left:6px">'+(!r.assessed?'未評估':r.rank==null?'NR':'#'+esc(r.rank))+'</span>'+pcMark(r)+' '+badges(r)+'</td>';
-    b+='<td class="fz num'+(EX.stale?' stale':'')+'" data-wq="'+eid+'" style="left:'+WFX[0][1]+'px">'+pxHtml(o)+'</td><td class="fz num" style="left:'+WFX[1][1]+'px">'+fmt(o.typ)+'</td><td class="fz num'+(EX.stale?' stale':'')+'" data-wm="'+eid+'" style="left:'+WFX[2][1]+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td><td class="fz num" style="left:'+WFX[3][1]+'px;border-right:2px solid #3A4149">'+gnHtml(o)+'</td>';
+    b+='<td class="fz num'+(EX.stale?' stale':'')+'" data-wq="'+eid+'" style="left:'+WFX[0][1]+'px">'+pxHtml(o)+'</td><td class="fz num" style="left:'+WFX[1][1]+'px">'+ctrHtml(o)+'</td><td class="fz num'+(EX.stale?' stale':'')+'" data-wm="'+eid+'" style="left:'+WFX[2][1]+'px;'+(EX.stale?'':mgStyle(mg))+'">'+mgTxt(o,mg)+'</td><td class="fz num" style="left:'+WFX[3][1]+'px;border-right:2px solid #3A4149">'+gnHtml(o)+'</td>';
     b+='<td class="vgrp first num">'+fmt(o.min)+'</td><td class="vgrp num">'+fmt(o.max)+'</td><td class="vgrp num'+(over?' over':'')+'" style="border-right:2px solid #3A4149">'+fmt(o.cap)+'</td>';
     r.maj.forEach(function(m){b+=scoreCell(m,false,'');});
     b+='<td class="jr" style="right:194px;border-left:1px solid var(--line2);text-align:center" data-spark="'+eid+'">'+spark(id)+'</td><td class="jr" style="right:44px;text-align:center" data-rev="'+eid+'">'+revBars(id)+'</td><td class="jr" style="right:0;text-align:center"><button class="addbtn on" data-menu="'+eid+'" aria-label="管理自選群組（目前 '+esc(gg?gg.name:'')+'）"><span class="dot" style="background:'+(gg?gg.color:'')+'"></span></button></td></tr>';
@@ -966,14 +971,16 @@ function sRender(){
 function sValRender(id){
   var r=BYID[id];if(!r)return;var o=sim(id),mg=margin(o);
   $('s-vbase').textContent=(QT.on?qtLabel().replace(/<[^>]+>/g,''):'行情尚未接上')+'｜估價基準日 '+(VAL.on&&VAL.date?md(VAL.date):'—');
-  var kv=[[EX.stale?pxLabel()+' <span class="stale-ic">⚠</span>':pxLabel(),EX.stale&&o.price!=null?'<span class="stale">'+fmt(o.price)+'</span>':pxHtml(o)],['中心',fmt(o.typ)],[EX.stale?'安全邊際 <span class="stale-ic">⚠</span>':'安全邊際','<span style="'+mgStyle(mg)+'">'+pct(mg)+'</span>'],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]];
+  var kv=[[EX.stale?pxLabel()+' <span class="stale-ic">⚠</span>':pxLabel(),EX.stale&&o.price!=null?'<span class="stale">'+fmt(o.price)+'</span>':pxHtml(o)],['中心',fmt(o.typ)+(relLow(o)?' <span class="rlab">可靠度較低</span>':'')],[EX.stale?'安全邊際 <span class="stale-ic">⚠</span>':'安全邊際','<span style="'+mgStyle(mg)+'">'+pct(mg)+'</span>'],['隱含成長率',gnHtml(o)],['下限',fmt(o.min)],['上限',fmt(o.max)],['數據上限',fmt(o.cap)]];
   function plain(h){return String(h).replace(/<[^>]+>/g,' ').replace(/&gt;/g,'>').replace(/&lt;/g,'<').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();}
   $('s-val').innerHTML=kv.map(function(x){return '<div title="'+esc(plain(x[0])+'：'+plain(x[1]))+'"><div class="k">'+x[0]+'</div><div class="v num">'+x[1]+'</div></div>';}).join('');
   // 共通限制每家都相同，收合顯示一次；原因碼已在狀態說明列出的旗標不再重複（2026-10-24 正式快照核對）
   $('s-vlimits').innerHTML=VAL.on&&VAL.limitations.length?'<details><summary>資料集共通限制（'+VAL.limitations.length+' 項，適用全部公司）</summary>'+VAL.limitations.map(function(x){return '<div title="'+esc(x.code)+'">・'+esc(x.message_zh)+'</div>';}).join('')+'</details>':'';
   var f=[],vr=VAL.on?(VAL.map[r.id]||{}):{},rc=vr.reason_codes||[];
   if(r.fin&&(o.flags||[]).indexOf('FINANCIAL_SECTOR')<0&&rc.indexOf('FINANCIAL_SECTOR')<0)f.push('<span class="flag">'+esc(tr1('FINANCIAL_SECTOR'))+'</span>');
-  var bf=(o.flags||[]).filter(function(c){return rc.indexOf(c)<0;}),seen={};
+  var bf=(o.flags||[]).filter(function(c){return rc.indexOf(c)<0&&!(relLow(o)&&o.relf.indexOf(c)>=0);}),seen={};
+  /* U-4：可靠度原因合併成一個標籤，不再逐項重複 */
+  if(relLow(o))f.push('<span class="flag rflag" title="'+esc(o.relf.join('、'))+'">'+esc(relTip(o))+'</span>');
   if(VAL.on&&o.vst==='OK'&&o.price!=null){var pos=o.price<o.min?'低於下限':o.price<o.typ?'下限–中心':o.price<o.max?'中心–上限':'高於上限';
     f.push('<span class="flag" title="'+esc(pxWord()+' '+fmt(o.price)+'；估價下限 '+fmt(o.min)+'、中心 '+fmt(o.typ)+'、上限 '+fmt(o.max)+'、數據上限 '+fmt(o.cap))+'">股價位置：'+pos+'</span>');
     /* 後端旗標已有「價格高於資料支持上限」就以後端為準，不再重複 */
