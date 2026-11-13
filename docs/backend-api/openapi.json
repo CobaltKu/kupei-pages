@@ -25,7 +25,7 @@
       "ingest": {
         "type": "http",
         "scheme": "bearer",
-        "description": "推送權杖（INGEST_TOKEN，同行情推送）。推送權杖專用端點用；給產生報告的管線，不要放進前端"
+        "description": "推送權杖（INGEST_TOKEN，同行情推送）。推送權杖專用端點用；給產生報告的管線，不要放進前端。2026-11-13 起（REPORT-02）報告管線的端點（推送／刪除／發布報告、切換現行版、新聞快照、取件、參考檔、讀 /data）也接受專用的 REPORT_PUSH_TOKEN（不能推行情）；INGEST_TOKEN 在過渡期仍可用於報告端點"
       }
     },
     "schemas": {
@@ -59,7 +59,10 @@
                   "INVITE_REQUIRED",
                   "INVITE_INVALID",
                   "INVALID_TRANSITION",
-                  "LIVE_UNAVAILABLE"
+                  "LIVE_UNAVAILABLE",
+                  "ALREADY_PUBLISHED",
+                  "LINEAGE_MISMATCH",
+                  "NOT_PUBLISHED"
                 ]
               },
               "message": {
@@ -894,7 +897,9 @@
           "title",
           "generatedAt",
           "url",
-          "files"
+          "files",
+          "publishedAt",
+          "current"
         ],
         "properties": {
           "period": {
@@ -934,6 +939,18 @@
             "items": {
               "$ref": "#/components/schemas/ReportFile"
             }
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "REPORT-02（2026-11-13）：用 POST …/{rev}/publish 發布的時間；DRAFT、FAILED、舊方式直接推 PUBLISHED 的是 null。舊後端沒有這個欄位，客戶端當 null"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "REPORT-02：是不是這一期的現行版（publish 或 POST …/{period}/current 設定）；沒有用 publish 發布過的期別全部 false。舊後端沒有這個欄位，客戶端當 false"
           }
         }
       },
@@ -946,7 +963,8 @@
             "type": "object",
             "required": [
               "summary",
-              "inputs"
+              "inputs",
+              "lineage"
             ],
             "properties": {
               "summary": {
@@ -963,6 +981,17 @@
                   "$ref": "#/components/schemas/ReportInputRef"
                 },
                 "description": "報告引用的參考檔（2026-10-28 起；沒有引用是空陣列）"
+              },
+              "lineage": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ReportLineage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "REPORT-02：推送時帶 publication 的版次才有，舊推送是 null。舊後端沒有這個欄位，客戶端當 null"
               }
             }
           }
@@ -982,7 +1011,8 @@
               "DRAFT",
               "PUBLISHED",
               "FAILED"
-            ]
+            ],
+            "description": "帶 publication 時只能是 DRAFT（發布一律走 POST …/{rev}/publish）"
           },
           "title": {
             "type": "string",
@@ -1028,6 +1058,9 @@
             "type": "integer",
             "minimum": 1,
             "description": "選填（2026-10-30）：這一版是哪一筆請求的結果；路徑的 code／period／rev 要等於請求配發的，不符 409 VERSION_CONFLICT，沒有這筆 404"
+          },
+          "publication": {
+            "$ref": "#/components/schemas/ReportPublication"
           }
         },
         "description": "本文最多 300 KB"
@@ -1908,6 +1941,362 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "NewsSnapshotItem": {
+        "type": "object",
+        "required": [
+          "title",
+          "source",
+          "publishedAt",
+          "url",
+          "summary",
+          "matchedKeywords"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "後端正規化成 UTC ISO 8601"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "https（不含帳密）"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500,
+            "description": "規則式摘要；推送時省略＝null"
+          },
+          "matchedKeywords": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50
+            },
+            "description": "推送時省略＝[]"
+          }
+        },
+        "additionalProperties": false,
+        "description": "REPORT-02 新聞快照的一則（只存標題、來源、時間、原文連結、摘要，不保存全文；不認得的欄位 400）"
+      },
+      "ReportLineage": {
+        "type": "object",
+        "required": [
+          "reportVersion",
+          "run",
+          "runHash",
+          "requestId",
+          "scoreItemIds",
+          "publishedAt",
+          "current",
+          "pdf",
+          "news"
+        ],
+        "properties": {
+          "reportVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "run": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+            "description": "產生這一版用的評分批次"
+          },
+          "runHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          },
+          "requestId": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "產生請求的 id"
+          },
+          "scoreItemIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+            },
+            "description": "引用的評分項目 id（去重、保持推送順序）"
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "publish 的時間；DRAFT 是 null"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "是不是這一期的現行版"
+          },
+          "pdf": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "name",
+              "bytes",
+              "sha256",
+              "downloadable"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "downloadable": {
+                "type": "boolean",
+                "description": "已用 publish 發布才是 true；下載用 GET …/{rev}/pdf（只限登入權杖）"
+              }
+            },
+            "description": "PDF 母檔（管線上傳的私人參考檔）的 metadata；參考檔已刪除是 null"
+          },
+          "news": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "id",
+              "sha256",
+              "createdAt",
+              "items"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^ns_[0-9a-f]{32}$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "items": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "$ref": "#/components/schemas/NewsSnapshotItem"
+                }
+              }
+            },
+            "description": "推送時引用的新聞快照；快照不存在是 null"
+          }
+        },
+        "description": "REPORT-02（2026-11-13）：兩層發布的 lineage（PDF 母檔、新聞快照、評分項目、產生請求）"
+      },
+      "ReportPublication": {
+        "type": "object",
+        "required": [
+          "pdfInputId",
+          "reportVersion",
+          "run",
+          "runHash",
+          "newsSnapshotId",
+          "newsSnapshotSha256",
+          "scoreItemIds"
+        ],
+        "properties": {
+          "pdfInputId": {
+            "type": "string",
+            "pattern": "^in_[0-9a-f]{32}$",
+            "description": "管線（推送權杖）上傳到這家公司的 PDF 參考檔，SHA-256 要等於 summary 的 publication.pdf_sha256；後端自動放進 inputs 最前面並鎖定"
+          },
+          "reportVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "description": "要等於 summary 的 publication.report_version"
+          },
+          "run": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+            "description": "產生請求鎖定的評分批次（publish 時比對）"
+          },
+          "runHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "description": "產生請求的 runHash（publish 時比對）"
+          },
+          "newsSnapshotId": {
+            "type": "string",
+            "pattern": "^ns_[0-9a-f]{32}$",
+            "description": "POST /api/reports/{code}/news-snapshots 回的 id"
+          },
+          "newsSnapshotSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "scoreItemIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "REPORT-02（2026-11-13）PUT 本文的選填 publication：帶了就是兩層發布的 DRAFT。條件：status 只能 DRAFT、requestId 必填、summary 要是合格的 kupei-report-publication/1（六章白名單純文字，不收 HTML 標籤、不含本機路徑）、版本與 PDF 相符；不符 400 BAD_REQUEST（details.reason）。不認得的欄位 400"
+      },
+      "NewsSnapshotInput": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "title",
+                "source",
+                "publishedAt",
+                "url"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "publishedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601，含時區"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "maxLength": 2048,
+                  "description": "https"
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 500
+                },
+                "matchedKeywords": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 50
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "0～50 則；0 則＝這次沒有新聞，報告照樣可以發布"
+          }
+        },
+        "additionalProperties": false,
+        "description": "本文最多 64 KB；不認得的欄位 400（不保存全文）"
+      },
+      "NewsSnapshotCreated": {
+        "type": "object",
+        "required": [
+          "id",
+          "sha256",
+          "count",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ns_[0-9a-f]{32}$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "正規化後 items 的 JSON（JSON.stringify(items)）的 SHA-256；推送報告時放進 publication.newsSnapshotSha256"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReportPublishResult": {
+        "type": "object",
+        "required": [
+          "status",
+          "current",
+          "publishedAt",
+          "unchanged"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "current": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "這一期現行版的 rev"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "這一版 publish 的時間"
+          },
+          "unchanged": {
+            "type": "boolean",
+            "description": "true＝本來就是已發布的現行版（重送），什麼都沒改"
           }
         }
       }
@@ -3474,7 +3863,7 @@
     },
     "/api/reports/{code}/{period}/{rev}": {
       "get": {
-        "summary": "單一份報告（含 summary 與引用的參考檔 metadata；唯讀、寫入、登入權杖）",
+        "summary": "單一份報告（含 summary、引用的參考檔 metadata 與 REPORT-02 的 lineage；唯讀、寫入、登入權杖）",
         "parameters": [
           {
             "$ref": "#/components/parameters/Code"
@@ -3565,7 +3954,7 @@
             }
           },
           "400": {
-            "description": "內容或路徑不對；inputs 有不存在、已刪除或別家公司的參考檔時 details: { missing }",
+            "description": "內容或路徑不對；inputs 有不存在、已刪除或別家公司的參考檔時 details: { missing }；帶 publication 時不合格 details: { reason }（例如 REPORT_VERSION_MISMATCH、PDF_SHA_MISMATCH，或 summary 的原因碼）",
             "content": {
               "application/json": {
                 "schema": {
@@ -3605,7 +3994,7 @@
             }
           },
           "409": {
-            "description": "帶 requestId 時路徑的 code／period／rev 和請求配發的不一致（VERSION_CONFLICT，details: { requestId, code, period, rev }）",
+            "description": "帶 requestId 時路徑的 code／period／rev 和請求配發的不一致（VERSION_CONFLICT，details: { requestId, code, period, rev }）；ALREADY_PUBLISHED：這一版已用 publish 發布，不能覆寫（details: { publishedAt }；要改內容請推新的 rev）",
             "content": {
               "application/json": {
                 "schema": {
@@ -3615,7 +4004,7 @@
             }
           }
         },
-        "description": "推送權杖專用：給產生報告的管線，不是給瀏覽器用。後端不存檔案，url 與 files[].url 只存外部 https 連結"
+        "description": "推送權杖專用：給產生報告的管線，不是給瀏覽器用。後端不存檔案，url 與 files[].url 只存外部 https 連結。REPORT-02（2026-11-13）：選填 publication＝兩層發布的 DRAFT，之後用 POST …/{rev}/publish 發布"
       },
       "delete": {
         "summary": "刪除一版報告（推送權杖專用）",
@@ -3668,6 +4057,330 @@
           },
           "404": {
             "description": "沒有這一版（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ALREADY_PUBLISHED：這一版已用 publish 發布，不能刪（details: { publishedAt }）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reports/{code}/{period}/{rev}/pdf": {
+      "get": {
+        "summary": "下載已發布版次的 PDF 母檔（REPORT-02；只限登入權杖）",
+        "description": "只給用 publish 發布的版次，而且 PDF 參考檔仍在、雜湊等於推送時檢查過的那份；DRAFT、沒有這一版、沒有 PDF 一律 404（不區分）。只限登入權杖（kps_）；唯讀、寫入權杖 403，推送權杖不能用。每個 IP 每分鐘 30 次（同其他帶權杖的 /api）。回應標頭同參考檔下載：Content-Disposition: attachment; filename*=UTF-8''…、X-Content-Type-Options: nosniff、Cache-Control: private, no-store、Content-Security-Policy: sandbox。沒有公開網址",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "$ref": "#/components/parameters/Period"
+          },
+          {
+            "$ref": "#/components/parameters/Rev"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF 本身",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "路徑格式不對",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "沒有已發布的報告 PDF（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/reports/{code}/{period}/{rev}/publish": {
+      "post": {
+        "summary": "發布一版報告並設成現行版（REPORT-02；推送權杖專用）",
+        "description": "這一版要是帶 publication 推送的 DRAFT。重驗全部 lineage（publication 格式、報告版本、PDF 母檔、產生請求的 run／runHash、新聞快照），通過才在同一個 batch 改成 PUBLISHED、寫 publishedAt、切換這一期的現行版、記稽核；任一項不符整批不做、現行版不變。已發布的版次不能再覆寫或刪除（PUT／DELETE 409 ALREADY_PUBLISHED）。沒有本文",
+        "security": [
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "$ref": "#/components/parameters/Period"
+          },
+          {
+            "$ref": "#/components/parameters/Rev"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已發布（或本來就是已發布的現行版：unchanged: true）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportPublishResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "路徑格式不對，或這一版推送時沒有帶 publication（BAD_REQUEST）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "推送權杖不對（不帶 CORS）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "沒有這一版（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ALREADY_PUBLISHED：已發布但不是現行版（details: { current }；要切回用 POST …/{period}/current）；INVALID_TRANSITION：狀態是 FAILED（details: { from, to }）；LINEAGE_MISMATCH：lineage 不符（details: { failed: [原因碼…] }）；VERSION_CONFLICT：檢查後這一版或它引用的 PDF／新聞快照被改過",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reports/{code}/{period}/current": {
+      "post": {
+        "summary": "切換這一期的現行版／退回（REPORT-02；推送權杖專用）",
+        "description": "目標要是用 publish 發布過的版次。重驗 lineage（產生請求已被 90 天清理刪掉不算失敗，存在而不符仍失敗），通過才在同一個 batch 切換現行版＋記稽核（rollback）。已經是現行版回 unchanged: true",
+        "security": [
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          },
+          {
+            "$ref": "#/components/parameters/Period"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "rev"
+                ],
+                "properties": {
+                  "rev": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 999999999
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已切換（或本來就是現行版：unchanged: true）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportPublishResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "內容或路徑不對（BAD_REQUEST）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "推送權杖不對（不帶 CORS）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "沒有這一版（NOT_FOUND）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "NOT_PUBLISHED：這一版沒有用 publish 發布過；LINEAGE_MISMATCH：lineage 不符（details: { failed }）；VERSION_CONFLICT：這一版剛被改過",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "本文超過 4 KB（TOO_LARGE）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reports/{code}/news-snapshots": {
+      "post": {
+        "summary": "建立新聞快照（REPORT-02；推送權杖專用）",
+        "description": "報告管線把這次引用的新聞存成不可變的快照，回 id 與 sha256，推送報告時放進 publication。只存標題、來源、時間、原文連結、摘要（不保存全文）。同一個 batch 順便清掉這家公司建立超過 30 天、沒有任何報告引用的舊快照（一次最多 20 筆）",
+        "security": [
+          {
+            "ingest": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Code"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewsSnapshotInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已建立",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewsSnapshotCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "內容或 code 不對（BAD_REQUEST）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "推送權杖不對（不帶 CORS）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "本文超過 64 KB（TOO_LARGE）",
             "content": {
               "application/json": {
                 "schema": {

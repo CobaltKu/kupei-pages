@@ -25,6 +25,9 @@
 //      requestReport 可帶設定（2026-10-30，REPORT-01）；reportSchedules.list／create／get／remove 管理自己的排程（只限登入）。
 //  10. 報告參考檔（2026-10-28）：reportInputs.upload／list／download／remove／unlock 只限登入（沒登入丟 401、不打網路）。
 //      upload 在瀏覽器算 SHA-256、依副檔名決定 Content-Type（不靠瀏覽器猜），本文是檔案原始位元組；只看得到自己上傳的。
+//  11. 報告兩層發布（2026-11-13，REPORT-02）：reports()／report() 多了 publishedAt、current（report() 另有 lineage），
+//      回應原樣傳回（相容）；要支援還沒升級的後端，用 normalizeReportMeta／normalizeReport 補成 null／false／null。已發布版次的 PDF 母檔用 reportPdf() 下載（只限登入；沒登入丟 401、不打網路）。
+//      新聞快照、publish、切換現行版是報告管線（推送權杖）用的，不在這個客戶端。
 //
 // 用法：
 //   const kupei = createKupeiClient({ baseUrl: import.meta.env.VITE_KUPEI_BASE })   // 2026-10-28 起不帶唯讀權杖（K-53）
@@ -54,6 +57,7 @@
 //   const input = await kupei.reportInputs.upload('2330', file)   // <input type="file"> 的 File；≤ 20 MiB、pdf/txt/md/csv/xlsx/png/jpg
 //   const blob = await kupei.reportInputs.download('2330', input.id)   // 只限自己上傳的；kupei.reportInputs.remove(...) 刪除
 //   await kupei.reportInputs.unlock('2330', input.id)   // 沒有報告再引用時解鎖（之後才能刪）；仍被引用 409 INPUT_REFERENCED
+//   if (r.lineage?.pdf?.downloadable) await kupei.reportPdf('2330', '2026Q2', 1)   // 已發布版次的 PDF（Blob）；只限登入
 import type {
   ApiErrorBody,
   AuthConfig,
@@ -260,6 +264,23 @@ export const INPUT_MIME_BY_EXT: Readonly<Record<string, ReportInputMime>> = {
 export function inputMimeOf(fileName: string): ReportInputMime | null {
   const m = /\.([A-Za-z0-9]+)$/.exec(fileName.trim())
   return (m && INPUT_MIME_BY_EXT[(m[1] ?? '').toLowerCase()]) || null
+}
+
+/** 舊後端（REPORT-02 之前）的報告列表項目沒有 publishedAt、current（單篇另外沒有 lineage） */
+export type RawReportMeta = Omit<ReportMeta, 'publishedAt' | 'current'> & Partial<Pick<ReportMeta, 'publishedAt' | 'current'>>
+export type RawReport = Omit<Report, 'publishedAt' | 'current' | 'lineage'> & Partial<Pick<Report, 'publishedAt' | 'current' | 'lineage'>>
+
+/**
+ * 報告 metadata 補齊 REPORT-02 欄位（舊後端沒有時 publishedAt＝null、current＝false；不打網路、不改其他欄位）。
+ * kupei.reports() 回應原樣傳回（相容），要同時支援新舊後端就 (await kupei.reports(code)).map(normalizeReportMeta)
+ */
+export function normalizeReportMeta<T extends RawReportMeta>(r: T): T & Pick<ReportMeta, 'publishedAt' | 'current'> {
+  return { ...r, publishedAt: typeof r.publishedAt === 'string' ? r.publishedAt : null, current: r.current === true }
+}
+
+/** 單篇報告補齊 REPORT-02 欄位：同 normalizeReportMeta，另外 lineage 沒有時＝null。用法：normalizeReport(await kupei.report(code, period, rev)) */
+export function normalizeReport(r: RawReport): Report {
+  return { ...normalizeReportMeta(r), lineage: r.lineage && typeof r.lineage === 'object' ? r.lineage : null }
 }
 
 export function createKupeiClient(cfg: KupeiConfig) {
@@ -772,12 +793,28 @@ export function createKupeiClient(cfg: KupeiConfig) {
      */
     newsSources: async (opts: { all?: boolean } = {}) => (await get<{ sources: NewsSource[] }>(`/api/news/sources${opts.all ? '?all=1' : ''}`)).sources,
 
-    /** 一家公司的報告（不含 summary）：period 新→舊、同期 rev 新→舊。所有狀態（DRAFT／PUBLISHED／FAILED）都會列出 */
+    /**
+     * 一家公司的報告（不含 summary）：period 新→舊、同期 rev 新→舊。所有狀態（DRAFT／PUBLISHED／FAILED）都會列出。
+     * 回應原樣傳回；REPORT-02 之前的後端沒有 publishedAt、current，要容錯就 .map(normalizeReportMeta)
+     */
     reports: async (code: string) => (await get<{ reports: ReportMeta[] }>(`/api/reports/${encodeURIComponent(code)}`, { cache: 'no-store' })).reports,
 
-    /** 單一份報告（含 summary）。沒有這份丟 KupeiError 404 NOT_FOUND */
+    /**
+     * 單一份報告（含 summary；REPORT-02 起含 lineage，舊推送是 null）。沒有這份丟 KupeiError 404 NOT_FOUND。
+     * 回應原樣傳回；REPORT-02 之前的後端沒有 publishedAt、current、lineage，要容錯就包一層 normalizeReport
+     */
     report: (code: string, period: string, rev: number) =>
       get<Report>(`/api/reports/${encodeURIComponent(code)}/${encodeURIComponent(period)}/${rev}`, { cache: 'no-store' }),
+
+    /**
+     * 已發布版次的 PDF 母檔（REPORT-02，2026-11-13；回 Blob，要存檔就用 URL.createObjectURL 搭配 <a download>）。
+     * 只限登入（沒登入丟 401 UNAUTHENTICATED、不打網路）。DRAFT、沒有這一版、沒有 PDF 一律 404 NOT_FOUND；
+     * 先看 report().lineage?.pdf?.downloadable 再顯示下載按鈕
+     */
+    async reportPdf(code: string, period: string, rev: number): Promise<Blob> {
+      const s = requireSession()
+      return get<Blob>(`/api/reports/${encodeURIComponent(code)}/${encodeURIComponent(period)}/${rev}/pdf`, { cache: 'no-store', token: s.token, blob: true })
+    },
 
     /**
      * 送出「產生報告」請求（要登入；沒登入丟 401 UNAUTHENTICATED、不打網路）。同一期、同樣設定已在排隊就回那一筆。
