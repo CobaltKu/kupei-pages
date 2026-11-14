@@ -50,7 +50,7 @@ const res = await fetch(`${BASE}/data/manifest.json`, { headers: { Authorization
 9. **寫入一律走 `kupei.store`**（自選、個股問題、設定、排程設定各一個 key），用 `store.update(key, fn)` 做讀改寫，`fn` 要是純函式。**雲端同步靠使用者帳號**：做登入／註冊畫面，呼叫 `kupei.auth.login()`（2026-10-28 起註冊預設關閉：`kupei.auth.config()` 的 `registrationOpen` 為 `true` 時才顯示註冊入口、呼叫 `kupei.auth.register()`，`inviteRequired` 為 true 才顯示「邀請碼」欄位，傳給 `register` 第三個參數）；設定畫面可以放「改密碼」（`kupei.auth.changePassword(目前密碼, 新密碼)`，成功後其他裝置全部登出、這台不用重登）；登入畫面可以放「忘記密碼」（輸入帳號、維護者給的重設碼、新密碼，呼叫 `kupei.auth.resetPassword(帳號, 重設碼, 新密碼)`，成功後直接是登入狀態；失敗一律提示「帳號或重設碼不對，請向維護者重新索取」）；用 `kupei.getSession()` 判斷有沒有登入（同步、不打網路），登出用 `kupei.auth.logout()`。~~沒登入時 App 退回本機模式、評分與行情不需要登入~~（2026-10-28 起改成：沒登入就只顯示登入畫面，見第 0 條）。
 10. **密碼與登入權杖不要自己存、不要印出、不要送去任何其他地方**：客戶端已經把登入權杖存在 `localStorage`（key `kupei:session`），密碼只在送出登入表單時用一次。不要做「記住密碼」。寫入權杖同理：不得放進建置、環境變數、repo secret 或原始碼（`kupei.setWriteToken()` 只留給站長本人的設定畫面）。
 11. 收到 401 `UNAUTHENTICATED` 而且當時是登入狀態 → 客戶端已自動登出（`getSession()` 變 `null`，`onSessionChange` 會通知），畫面回到登入頁即可，不要用存起來的密碼自動重登。
-12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；要精準篩選（2026-10-30 起）改用 `kupei.news({ kind: 'industry', q })`（至少命中 2 個字）或 `kupei.news({ kind: 'stock', code, name, topics })`（`topics` 最多 10 個；「公司＋主題詞」或「沒有公司但 2 個主題詞」，2026-10-31 起），會多科技新報、每則有 `media`、`via`、`matchedKeywords`（可顯示「命中：AI、半導體」），關鍵字不夠時丟 400 `NOT_ENOUGH_KEYWORDS`——顯示提示，不要自己改用舊版 OR 查詢；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存報告檔案。使用者要給報告管線的**參考檔**（PDF、圖片、試算表、文字檔）用 `kupei.reportInputs.upload(code, file)` 上傳（2026-10-28 起，只限登入；見「報告參考檔」一節），不要自己組上傳請求、不要把檔案轉 base64 放進 JSON 或雲端文件。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period, settings?)`（2026-10-30 起可帶設定：關鍵字 2～10 個、要不要新聞、關注大項、比較上一版、參考檔 id；送出後鎖成快照，回應的 `rev` 就是報告產生後的版號），進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。排程用 `kupei.reportSchedules.create／list／remove`（每人 20 個；到期時後端建立請求，**不是準點**，見「報告排程」）。報告是外部管線產生的，後端不會自己產生。
+12. **新聞與報告**（2026-10-27 起）：新聞用 `kupei.news({ q, exclude, days })`（後端代抓 Google 新聞，只有標題、來源、時間、原文連結，點了開原文；`stale: true` 表示來源暫時抓不到、這是較舊的結果，可以小字提示）；要精準篩選（2026-10-30 起）改用 `kupei.news({ kind: 'industry', q })`（至少命中 2 個字）或 `kupei.news({ kind: 'stock', code, name, topics })`（`topics` 最多 10 個；「公司＋主題詞」或「沒有公司但 2 個主題詞」，2026-10-31 起），會多科技新報、每則有 `media`、`via`、`matchedKeywords`（可顯示「命中：AI、半導體」），關鍵字不夠時丟 400 `NOT_ENOUGH_KEYWORDS`——顯示提示，不要自己改用舊版 OR 查詢；報告用 `kupei.reports(code)` 列出、`kupei.report(code, period, rev)` 讀單一份（含 `summary`）。報告檔案只有外部連結（`url`、`files[].url`），後端不存報告檔案。使用者要給報告管線的**參考檔**（PDF、圖片、試算表、文字檔）用 `kupei.reportInputs.upload(code, file)` 上傳（2026-10-28 起，只限登入；見「報告參考檔」一節），不要自己組上傳請求、不要把檔案轉 base64 放進 JSON 或雲端文件。「產生報告」按鈕只在登入時顯示，呼叫 `kupei.requestReport(code, period, settings?)`（2026-10-30 起可帶設定：關鍵字 2～10 個、要不要新聞、關注大項、比較上一版、參考檔 id；送出後鎖成快照，回應的 `rev` 就是報告產生後的版號），進度用 `kupei.reportRequests(code)` 看——**不要輪詢**，使用者回到頁面或手動重新整理時再查即可。排程用 `kupei.reportSchedules.create／list／remove`（每人 20 個；到期時後端建立請求，**不是準點**，見「報告排程」）。報告是外部管線產生的，後端不會自己產生。**兩層發布**（2026-11-13 起，REPORT-02）：同一期以列表裡 `current: true` 的那一版為「現行版」（沒有任何一版是 `current` 的期別是舊流程推送的，照以前的方式顯示）；網頁版內容是 `summary` 裡的 `kupei-report-publication/1`（六章純文字，**照純文字顯示，不要當 HTML 或 Markdown 渲染**）；「下載 PDF」按鈕只在單篇的 `lineage.pdf.downloadable` 為 `true` 時顯示，呼叫 `GET /api/reports/<code>/<period>/<rev>/pdf`（只限登入，見「報告兩層發布」）；新聞摘要（`lineage.news.items`）是獨立區塊，不要混進報告章節。
 
 ## 端點
 
@@ -226,8 +226,9 @@ await kupei.auth.logout()
 | `GET` | `/api/news?kind=industry&q=AI,半導體,散熱&exclude=廣告&days=3` | **精準查詢・產業**（2026-10-30 起，NEWS-03／NEWS-04）。`q` **2～5 個**關鍵字（同一組），一則新聞要在來源給的**標題＋摘要**裡命中**至少 2 個不同的字**才回。回 `{ items: [{ title, url, source, media, via, publishedAt, summary, matchedKeywords }], fetchedAt, source: "news-aggregate", kind: "industry", stale?, partial? }`（見下方說明） |
 | `GET` | `/api/news?kind=stock&code=2330&name=台積電&topics=法說會,外資&exclude=廣告&days=5` | **精準查詢・個股**。`code` 4 碼（必填）、`name` 公司名稱（選填，建議帶）、`topics` **1～10 個主題詞**（2026-10-31 起，NEWS-05；`code`／`name` 不占名額，超過 10 個 400 `BAD_REQUEST`）。標題＋摘要符合**任一**就收：**A.** 命中公司名稱或代號至少一個，**且**再命中主題詞至少 1 個；**B.** 沒命中公司名稱與代號，但命中**至少 2 個不同的主題詞**（只設 1 個主題詞時只有 A）。公司名稱與代號不互相充當主題詞（`topics` 裡等於名稱／代號、或是它們一部分的字會被拿掉，例如名稱「台積電」時的「積電」）。回應同上，`kind: "stock"` |
 | `GET` | `/api/news/sources`、`/api/news/sources?all=1` | `{ sources: [{ id, name, url, accessMode, via? }] }`。**預設 3 個**＝後端會抓的來源：Google 新聞、Bing 新聞、科技新報（2026-10-30 起多了科技新報；前兩個 `google-news`、`bing-news` 的 `id`／`name`／`url` 不變）。**`?all=1` 回完整 14 個**（`all` 只認 `1`，其他值當預設）。`accessMode`：`aggregator_rss`（Google 新聞、Bing 新聞：後端代抓搜尋 RSS）、`official_rss`（科技新報：後端代抓官方 RSS）、`pending_official_feed`（TechOrange、INSIDE、商業周刊、數位時代：等官方 feed，**不擷取**）、`external_link`（關鍵評論網、遠見、工商時報、經濟日報、IEK、台灣產經新聞網、財訊：只列入口，**不擷取**）。`via` 只有後端會抓的三個才有（`google`／`bing`／`technews`，＝精準查詢每則的 `via`）。**注意**：`all=1` 清單裡 `external_link` 的「工商時報」「經濟日報」也是新聞結果裡常見的發布媒體名稱；要分出聚合器請看 `accessMode === 'aggregator_rss'`。舊版查詢：後端先抓 Bing 新聞（每個關鍵字各查一次再合併），失敗才改抓 Google 新聞（Google 會擋 Cloudflare 機房 IP）；`source` 欄位固定為 `"google-news-rss"`，代表「RSS 聚合來源」，不分是哪一家。每則的 `source` 才是發布媒體名稱 |
-| `GET` | `/api/reports/<code>` | `{ reports: [{ period, rev, status, title, generatedAt, url, files }] }`（不含 `summary`）。`code` 4 碼數字。`period` 新→舊、同期 `rev` 新→舊；`status` 是 `DRAFT`／`PUBLISHED`／`FAILED`；`url` 是 https 或 `null`；`files` 是 `[{ name, url }]`（外部 https 連結，後端不存檔案） |
-| `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）與 `inputs: [{ id, name, mime, bytes, sha256, createdAt }]`（報告引用的參考檔，2026-10-28 起；沒有引用是 `[]`；下載只限上傳者本人）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
+| `GET` | `/api/reports/<code>` | `{ reports: [{ period, rev, status, title, generatedAt, url, files, publishedAt, current }] }`（不含 `summary`）。`publishedAt`、`current` 2026-11-13 起（REPORT-02）：用發布端點發布的時間（其他是 `null`）、是不是這一期的現行版（舊流程的報告一律 `false`）。`code` 4 碼數字。`period` 新→舊、同期 `rev` 新→舊；`status` 是 `DRAFT`／`PUBLISHED`／`FAILED`；`url` 是 https 或 `null`；`files` 是 `[{ name, url }]`（外部 https 連結，後端不存檔案） |
+| `GET` | `/api/reports/<code>/<period>/<rev>` | 同一筆加 `summary`（純文字或 markdown，可能是 `null`）與 `inputs: [{ id, name, mime, bytes, sha256, createdAt }]`（報告引用的參考檔，2026-10-28 起；沒有引用是 `[]`；下載只限上傳者本人），以及 `lineage`（2026-11-13 起，兩層發布的來源資訊，舊流程的報告是 `null`；形狀見「報告兩層發布」）。`period` 像 `2026Q2`、`rev` 正整數；沒有 **404** `NOT_FOUND` |
+| `GET` | `/api/reports/<code>/<period>/<rev>/pdf` | **登入權杖**（2026-11-13 起，REPORT-02）。下載這一版的 PDF 母檔（`Content-Type: application/pdf`、`Content-Disposition: attachment`、`Cache-Control: private, no-store`）。只給已發布的版次（`lineage.pdf.downloadable` 為 `true`）；DRAFT、舊流程的報告、不存在一律 **404** `NOT_FOUND`。唯讀、寫入權杖 **403** `FORBIDDEN` |
 | `POST` | `/api/reports/<code>/requests` | **登入權杖**。本文 `{ "period": "2026Q2", "trigger": "MANUAL", "settings"?: {…} }`（`settings` 見下，2026-10-30 起）→ **202** `{ id, status: "QUEUED", createdAt, rev, settings, run }`。同一期、**同樣設定**已經在排隊就回那一筆（**200**，同樣形狀）。每個帳號最多 20 筆排隊中，超過 **403** `QUOTA_EXCEEDED`（`details: { queued, maxQueued }`）。設定格式不對、參考檔不是自己的 **400** `BAD_REQUEST`（後者 `details: { missing: [id…] }`） |
 | `GET` | `/api/reports/<code>/requests` | **登入權杖**。`{ requests: [{ id, period, trigger, status, createdAt, updatedAt, message, rev, settings, run, scheduleId }] }`，只有自己的，新→舊。`status`：`QUEUED`→`RUNNING`→`DONE`／`FAILED`，`message` 是管線留的說明（可能 `null`）；`trigger` 是 `MANUAL` 或 `SCHEDULED`（排程建立的，`scheduleId` 是哪個排程）；2026-10-30 以前建立的請求 `rev`、`settings`、`run`、`scheduleId` 是 `null` |
 | `POST` | `/api/reports/schedules` | **登入權杖**（2026-10-30）。本文 `{ code, period, frequency, time, weekday?, date?, settings? }`（見「報告排程」）→ **201** 排程。每個帳號最多 20 個，超過 **403** `QUOTA_EXCEEDED`（`details: { schedules, maxSchedules }`） |
@@ -275,12 +276,15 @@ await kupei.auth.logout()
 - 每次沒命中快取時上游最多 5 次 Bing（產業 2 個字 1 次、3 個字 3 次、4～5 個字每字 1 次；個股見下）＋1 次科技新報（共用快取時 0 次），Bing 全失敗才 1 次 Google；整個查詢仍只計入上面的 6 次限制一次。
 - **個股的上游查詢**（2026-10-31，主題詞依正規化後排序、記作 t1、t2…；「公司」＝`name`，沒帶就是 `code`）：主題詞 1 個：「公司 t1」1 次；2 個：「公司 t1」「公司 t2」「t1 t2」3 次；3 個：「公司 t1～t3」各 1 次＋「t1 t2」共 4 次；4～10 個：「公司」單獨 1 次＋「公司 t1」「公司 t2」＋「t1 t2」「t3 t4」共 5 次。Google 備援 1 次：主題詞 1 個時 `(名稱 OR 代號) (t1)`，2 個以上 `(名稱 OR 代號 OR t1 OR … OR tN)`。**取捨**：Bing 每次只能查一組字、次數上限 5，第 5 個以後的主題詞不另外查 Bing；但所有抓到的候選（含「公司」單獨查、科技新報整份 feed、Google 備援）一律用全部主題詞篩，所以仍會被 A／B 收進來，只是候選比前 4 個少。
 
-**推送權杖專用**（給產生報告的管線，不是給瀏覽器用；`Authorization: Bearer <INGEST_TOKEN>`，同行情推送的那把，**不要放進前端**）：
+**推送權杖專用**（給產生報告的管線，不是給瀏覽器用；`Authorization: Bearer <REPORT_PUSH_TOKEN>`（2026-11-13 起的報告專用權杖，只能用報告管線，不能推行情；由維護者以私人管道交付）或過渡期仍可用的 `<INGEST_TOKEN>`（行情推送的那把），**不要放進前端**）：
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20, requestId?: 請求 id }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`requestId`（2026-10-30 起，建議帶）：路徑的 code／period／rev 要等於那筆請求配發的，不符 **409** `VERSION_CONFLICT`（`details: { requestId, code, period, rev }`＝請求配發的），沒有這筆 **404**。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`）；覆寫或刪除報告後，**沒有任何報告再引用**的參考檔自動解鎖（2026-10-28 起） |
-| `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404 |
+| `PUT` | `/api/reports/<code>/<period>/<rev>` | 本文 `{ status: "DRAFT"\|"PUBLISHED"\|"FAILED", title: ≤200 字, generatedAt: ISO 8601（含時區）, summary?: ≤65,536 字, url?: https\|null, files?: [{ name: ≤200 字, url: https }] ≤ 20, inputs?: [參考檔 id] ≤ 20, requestId?: 請求 id }`，本文 ≤ 300 KB（超過 413）。同一版再推＝覆寫。成功 `{ status: "ok" }`。`requestId`（2026-10-30 起，建議帶）：路徑的 code／period／rev 要等於那筆請求配發的，不符 **409** `VERSION_CONFLICT`（`details: { requestId, code, period, rev }`＝請求配發的），沒有這筆 **404**。`inputs`（2026-10-28 起）：引用的參考檔要是同一家公司、未刪除的，否則 **400** `BAD_REQUEST`（`details: { missing: [id…] }`、報告不寫）；被引用的參考檔會**鎖定**，之後不能刪（409 `INPUT_LOCKED`）；覆寫或刪除報告後，**沒有任何報告再引用**的參考檔自動解鎖（2026-10-28 起）。`publication`（2026-11-13 起，選填）：兩層發布的 lineage，帶了就只能推 `DRAFT`、`requestId` 必填，見「報告兩層發布」。用發布端點發布過的版次不能再覆寫 **409** `ALREADY_PUBLISHED`（改內容請推新的 rev） |
+| `DELETE` | `/api/reports/<code>/<period>/<rev>` | 成功 `{ status: "ok" }`；沒有這一版 404；用發布端點發布過的版次 **409** `ALREADY_PUBLISHED`（2026-11-13 起） |
+| `POST` | `/api/reports/<code>/news-snapshots` | 2026-11-13 起（REPORT-02）。新聞快照：本文 `{ items: [{ title, source, publishedAt, url, summary?, matchedKeywords? }] }`（0～50 則，≤ 64 KB）→ **201** `{ id, sha256, count, createdAt }`。只收 metadata，多了其他欄位（例如全文 `content`）400。見「報告兩層發布」 |
+| `POST` | `/api/reports/<code>/<period>/<rev>/publish` | 2026-11-13 起。發布一版（沒有本文）：重驗全部 lineage，通過才改成 `PUBLISHED` 並切換成這一期的現行版 → `{ status: "ok", current, publishedAt, unchanged }`。不符 **409** `LINEAGE_MISMATCH`（`details.failed`），報告與現行版都不動 |
+| `POST` | `/api/reports/<code>/<period>/current` | 2026-11-13 起。切換現行版／退回：本文 `{ "rev": 1 }`（只能是以前用 publish 發布過的版次，否則 **409** `NOT_PUBLISHED`）→ 同上形狀。lineage 重驗不符 **409** `LINEAGE_MISMATCH` |
 | `GET` | `/api/reports/requests?status=QUEUED&limit=50` | 所有帳號的請求（不含帳號名），舊→新：`{ requests: [{ id, code, period, trigger, status, createdAt, rev, settings, run, runHash, runHashes, scheduleId }] }`。`status` 預設 `QUEUED`（可 `RUNNING`／`DONE`／`FAILED`），`limit` 1～200 預設 50。2026-10-30 起：`settings`（設定快照，沒帶是 `null`）、`run`／`runHashes`（建立當下的 `manifest.run`／`manifest.hashes`）、`runHash`（批次指紋，算法見下）、`rev`（後端配發的版號，發布時用它）都在建立時鎖定，**同一筆重取不會變**；之前建立的請求這些是 `null` |
 | `GET`／`HEAD` | `/data/manifest.json`、`/data/<run>/…` | 2026-10-30 起推送權杖也能讀評分批次（同唯讀權杖的範圍）：用請求的 `run` 讀 `/data/<run>/summary.json?v=<runHashes.summary>`、`details/<代號>.json`、`tr.json`、`valuation.json`（`runHashes` 有 `valuation` 才有）等。其他方法 403；推送權杖讀 `/api/market/*` 等仍 401 |
 | `POST` | `/api/reports/schedules/tick` | 立刻處理到期的報告排程（同後端排程做的事）→ `{ due, created }`。維運用，平常不用呼叫 |
@@ -289,6 +293,67 @@ await kupei.auth.logout()
 推送權杖錯或沒帶 → 401（不帶 CORS）。用唯讀、寫入、登入權杖打這些（`/data/*` 除外）也是 401。
 
 **管線的建議流程**（2026-10-30）：`GET /api/reports/requests?status=QUEUED` → 每筆 `PATCH …/requests/<id>` `RUNNING` → 檢查 `run` 不是 `null`（是的話 `FAILED`）→ 讀 `/data/<run>/…`、`/api/reports/<code>/inputs/<id>`（`settings.inputIds`）→ 產生報告 → `PUT /api/reports/<code>/<period>/<rev>`（`rev` 用請求的、本文帶 `requestId` 與 `inputs`）→ `PATCH` `DONE`（失敗 `FAILED`＋`message`）。`runHash`＝SHA-256 of `JSON.stringify([run, [[鍵, 值]…（鍵照字母排序）]])` 的 hex 前 16 位（Python：`hashlib.sha256(json.dumps([run, sorted(hashes.items())], separators=(',', ':')).encode()).hexdigest()[:16]`），可以拿目前的 manifest 算一次比對，看批次是否原地改寫過。舊批次資料夾可能被清掉：請求放太久，`/data/<run>/…` 可能 404。
+
+### 報告兩層發布（2026-11-13 起，REPORT-02）
+
+同一個版次（code＋期別＋rev）綁兩層：① **PDF 母檔**＝管線上傳到私人儲存的 PDF（報告參考檔，`createdBy: "pipeline"`）；② **網頁版**＝報告 `summary` 裡的 `kupei-report-publication/1`（六章結構化**純文字**，不收 HTML、不收 Markdown）。兩層用同一組 lineage（報告版本、PDF SHA-256、正式 run／runHash、新聞快照、評分項目、request ID）綁住，發布端點全部重驗通過才切換「現行版」。**相容**：全部是新增；舊流程（推送不帶 `publication`）照舊，可以直接推 `PUBLISHED`、可以覆寫與刪除。唯一收緊的是「用發布端點發布過的版次不能再 `PUT` 覆寫或 `DELETE`」，只影響走新流程的版次。
+
+**推送時的 `publication`**（`PUT /api/reports/<code>/<period>/<rev>` 本文的選填物件；`requestId` 照舊放最外層，帶 `publication` 時必填）：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `pdfInputId` | PDF 參考檔 id（`in_` 加 32 位 hex）：要是**這家公司、管線用推送權杖上傳、`application/pdf`、沒刪除**的，SHA-256 要等於 summary 的 `pdf_sha256`。後端會自動把它加進 `inputs`（鎖定，不能刪） |
+| `reportVersion` | 1～60 字，要等於 summary 的 `report_version` |
+| `run`、`runHash` | 請求的 `run`、`runHash`（取件時拿到的；發布時比對請求建立時鎖定的值） |
+| `newsSnapshotId`、`newsSnapshotSha256` | 新聞快照端點回的 `id`、`sha256` |
+| `scoreItemIds` | 評分系統選定的深入分析項目 id，1～50 個，英數與 `_` `.` `-`（1～64 字）；後端只檢查格式 |
+
+帶 `publication` 時推送就會擋（400 `BAD_REQUEST`，`details.reason` 是原因碼）：`status` 不是 `DRAFT`；summary 不是合格的 publication；報告版本不一致（`REPORT_VERSION_MISMATCH`）；PDF 不合格（`PDF_MISSING`、`PDF_NOT_PIPELINE`、`PDF_NOT_PDF`、`PDF_SHA_MISMATCH`）；`publication` 有不認得的欄位。
+
+**summary 的格式**（同前端 `parsePublication`；第一個不合格的原因碼就是 `details.reason`）：`{ format: "kupei-report-publication/1", publication: {…}, sections: [{ id, text }…] }`。`publication` 必填 `stock_id`（＝路徑代號）、`company_name`、`report_period`（＝路徑期別）、`revision`（數字，＝路徑 rev）、`report_version`、`generated_at`、`financial_period`、`score_period`、`valuation_date`／`price_date`／`evidence_date`（`YYYY-MM-DD`）、`evidence_sha256`／`pdf_sha256`（64 位小寫 hex）、`evidence_status`（`OK` 時 `partial_reasons` 要是 `[]`；`PARTIAL` 時至少一項）、`partial_reasons`、`pipeline_version`、`malware_scan_status: "PASSED"`、`claude_signoff`／`codex_signoff`（各有 `role, signer, signed_at, report_version, evidence, result`，`result` 不能是「待簽」，`report_version` 要一致）、`publication_status: "PUBLISHED"`（publication 文件自己的欄位；報告推送時仍是 `DRAFT`）。`sections` 正好六章、不重複：`short_term_check`、`valuation`、`growth_driver`、`thesis_counter`、`limits`、`report_info`；每章 `text` 非空、≤ 20,000 字、不含 HTML 標籤、不含本機路徑（`/Users/…`、`C:\…`、`file://`、`~/` 等；來源索引只放精簡引用）。後端只驗格式與一致性，掃毒結果、evidence、簽章都以管線填的為準。
+
+**新聞快照** `POST /api/reports/<code>/news-snapshots`：每則 `title` 1～300 字、`source` 1～100 字、`publishedAt` ISO 8601、`url` https、`summary` ≤ 500 字（規則式摘要，可省略）、`matchedKeywords` 0～10 個（可省略）。**新聞抓不到時推 `{ "items": [] }`**（0 則照樣可以發布，新聞不阻擋報告）。`sha256` 是後端對正規化後 items（`publishedAt` 轉 UTC、省略的欄位補 `null`／`[]`）算的，報告引用時原樣帶回即可。快照建立後不會變；沒被任何報告引用、超過 30 天的會被清掉（推新快照時順便清），被引用的一直保留。
+
+**發布與退回**：
+- `POST …/<period>/<rev>/publish`：這一版要是帶 `publication` 推送的 `DRAFT`。全部對上才在**同一筆交易**改成 `PUBLISHED`、記 `publishedAt`、切換這一期的現行版；任一項不符 **409** `LINEAGE_MISMATCH`，什麼都不改。檢查之後這一版剛好被覆寫 **409** `VERSION_CONFLICT`（重新讀取後再發布）。已經是現行版再送一次 200 `unchanged: true`。推送時沒帶 `publication` 400。
+- `POST …/<period>/current` 本文 `{ "rev": n }`：切回以前發布過的版次，同一套重驗（產生請求已被 90 天清理刪掉不算失敗）。沒發布過 **409** `NOT_PUBLISHED`。
+- 發布過的版次不能覆寫或刪除（**409** `ALREADY_PUBLISHED`），它引用的 PDF 也因為被引用而不能刪（409 `INPUT_LOCKED`）。
+
+**`LINEAGE_MISMATCH` 的 `details.failed` 原因碼**（可能同時好幾個）：
+
+| 原因碼 | 意思 |
+| --- | --- |
+| `PUBLICATION_<原因>` | summary 不是合格的 publication，`<原因>` 同上（例如 `PUBLICATION_SECTION_MISSING`） |
+| `REPORT_VERSION_MISMATCH` | `publication.reportVersion` 和 summary 的 `report_version` 不同 |
+| `PDF_MISSING` | PDF 參考檔不存在、已刪除，或不是這家公司的 |
+| `PDF_NOT_PIPELINE` | PDF 不是管線上傳的（是使用者帳號上傳的） |
+| `PDF_NOT_PDF` | 參考檔不是 `application/pdf` |
+| `PDF_SHA_MISMATCH` | PDF 的 SHA-256 不等於 summary 的 `pdf_sha256` |
+| `REQUEST_MISSING` | `requestId` 那筆請求不存在（退回時不算失敗） |
+| `REQUEST_MISMATCH` | 請求的代號／期別／rev 和這一版不同 |
+| `REQUEST_NO_RUN` | 請求建立時沒有記到 `run`（批次讀不到） |
+| `RUN_MISMATCH` | `run`／`runHash` 不等於請求建立時鎖定的 |
+| `NEWS_SNAPSHOT_MISSING` | 新聞快照不存在（例如沒被引用、超過 30 天被清掉） |
+| `NEWS_SNAPSHOT_MISMATCH` | 快照不是這家公司的，或 `newsSnapshotSha256` 不符 |
+| `NO_LINEAGE` | 這一版沒有可用的 lineage |
+
+**單篇的 `lineage`**：`{ reportVersion, run, runHash, requestId, scoreItemIds, publishedAt, current, pdf: { name, bytes, sha256, downloadable } | null, news: { id, sha256, createdAt, items: [{ title, source, publishedAt, url, summary, matchedKeywords }] } | null }`。`pdf.downloadable` 只有已發布的版次是 `true`；PDF 已刪除或快照不存在時那一項是 `null`。
+
+**管線操作（3526 凡甲驗收流程）**，全程用 `REPORT_PUSH_TOKEN`：
+1. 取件：`GET /api/reports/requests?status=QUEUED`，找到 3526 那筆 → `PATCH …/requests/<id>` `RUNNING`，記下 `id`、`rev`、`run`、`runHash`。
+2. 上傳核定 PDF：`POST /api/reports/3526/inputs?name=3526_<期別>.pdf`（`Content-Type: application/pdf`、`X-Content-SHA256`）→ 記下 `id`（`createdBy` 要是 `pipeline`）。
+3. 新聞快照：`POST /api/reports/3526/news-snapshots` → 記下 `id`、`sha256`（沒有新聞就推 `items: []`）。
+4. 推 DRAFT：`PUT /api/reports/3526/<期別>/<rev>`，本文 `status: "DRAFT"`、`summary`＝publication（`revision`＝rev、`pdf_sha256`＝第 2 步的 SHA）、`requestId`、`publication: { pdfInputId, reportVersion, run, runHash, newsSnapshotId, newsSnapshotSha256, scoreItemIds }` → 200。
+5. 發布：`POST /api/reports/3526/<期別>/<rev>/publish` → 200 `{ current: <rev>, unchanged: false }`，再 `PATCH …/requests/<id>` `DONE`。
+6. 登入帳號驗證：`GET /api/reports/3526` 那一版 `status: "PUBLISHED"`、`current: true`；單篇 `lineage.pdf.downloadable: true`、`lineage.news` 有快照；`GET /api/reports/3526/<期別>/<rev>/pdf` 下載後算 SHA-256，要等於 `pdf_sha256`。
+7. 反向：再排一個新的 rev，推一份雜湊不符的 DRAFT（例如 `newsSnapshotSha256` 故意改錯）→ `publish` **409** `LINEAGE_MISMATCH`、`details.failed` 含 `NEWS_SNAPSHOT_MISMATCH`；列表的現行版仍是第 5 步那版。對已發布那版再 `PUT` 或 `DELETE` 都 **409** `ALREADY_PUBLISHED`。
+8. 退回：把反向那版修正後發布（現行版變成新的 rev）→ `POST /api/reports/3526/<期別>/current` `{ "rev": <第 5 步的 rev> }` → 200，列表與單篇的 `current` 回到舊版。
+
+**給前端**：
+- 一期有好幾版時，顯示 `current: true` 的那一版；沒有任何一版是 `current` 的期別是舊流程推送的，照以前的方式顯示。
+- 網頁版內容用 `summary` 解析 `kupei-report-publication/1`，任何一項不合格整份不顯示（同現行前端規則）；六章一律當**純文字**顯示，不要用 HTML 或 Markdown 渲染。`evidence_status` 是 `PARTIAL` 時固定顯示資料不完整警示。
+- 「下載 PDF」按鈕**只對 `lineage.pdf.downloadable === true` 顯示**，用登入權杖打 `GET …/<rev>/pdf`（回應是附件，不要把網址存起來或分享，它沒有公開版本）；其他情況（DRAFT、舊流程、`lineage` 是 `null`）不顯示按鈕。
+- 新聞摘要（`lineage.news.items`）是**獨立區塊**，不要混進六章或改寫報告結論；`items` 是空陣列就顯示「這一版沒有新聞」之類，或不顯示區塊。
 
 ### 報告參考檔 `/api/reports/<code>/inputs`（2026-10-28）
 
@@ -337,14 +402,17 @@ await kupei.auth.logout()
 | 403 | `INVITE_REQUIRED` | 註冊需要邀請碼但沒填（`GET /api/auth/config` 的 `inviteRequired` 為 true） |
 | 403 | `INVITE_INVALID` | 註冊的邀請碼不對 |
 | 409 | `USERNAME_TAKEN` | 註冊的帳號已被使用 |
-| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀或寫入權杖打 `/api/market/live`、唯讀權杖打 `/api/store`、唯讀或寫入權杖打報告參考檔 `/api/reports/<code>/inputs*`、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
+| 403 | `FORBIDDEN` | 權杖有效但這個路徑不開放：唯讀或寫入權杖打 `/api/market/live`、唯讀權杖打 `/api/store`、唯讀或寫入權杖打報告參考檔 `/api/reports/<code>/inputs*`、唯讀或寫入權杖打報告 PDF `/api/reports/<code>/<period>/<rev>/pdf`（2026-11-13）、任何權杖打站長的自選／登入狀態／補抓，以及不存在的 `/api/*` 路徑 |
 | 409 | `VERSION_CONFLICT` | 寫入或刪除時 `baseVersion` 不是最新；`error.details` 是雲端最新的文件。報告推送帶 `requestId` 時路徑的 code／period／rev 和請求配發的不一致也是這個（推送權杖，2026-10-30），`details` 是 `{ requestId, code, period, rev }` |
 | 403 | `QUOTA_EXCEEDED` | 雲端文件超過每個帳號的上限（50 份或合計 2 MB）；`error.details` 是 `{ docs, bytes, maxDocs, maxBytes }`。報告請求排隊中超過 20 筆時也是這個，`details` 是 `{ queued, maxQueued }`；報告排程超過 20 個（2026-10-30）`details` 是 `{ schedules, maxSchedules }`。**報告參考檔超過 50 個或 200 MiB 時是 413**（不是 403），`details` 是 `{ files, bytes, maxFiles, maxBytes }` |
 | 409 | `INPUT_LOCKED` | 報告參考檔已被報告引用，不能刪除 |
 | 409 | `INPUT_REFERENCED` | 解鎖報告參考檔時仍有報告引用它（`POST …/inputs/<id>/unlock`）；`error.details` 是 `{ reports: [{ period, rev }] }`（最多 20 筆） |
 | 400 | `CHECKSUM_MISMATCH` | 報告參考檔上傳的 `X-Content-SHA256` 和收到的內容不符；檔案沒有存，重傳即可 |
 | 415 | `UNSUPPORTED_TYPE` | 報告參考檔的副檔名、`Content-Type` 或內容不在允許範圍，或三者對不上 |
-| 409 | `INVALID_TRANSITION` | 報告請求的狀態不能這樣改（推送權杖的 `PATCH /api/reports/requests/<id>`）；`error.details` 是 `{ from, to }` |
+| 409 | `INVALID_TRANSITION` | 報告請求的狀態不能這樣改（推送權杖的 `PATCH /api/reports/requests/<id>`）；`error.details` 是 `{ from, to }`。發布端點對不是 `DRAFT` 的版次也回這個（`to: "PUBLISHED"`） |
+| 409 | `ALREADY_PUBLISHED` | 報告（2026-11-13 起，REPORT-02）：這一版已用發布端點發布過，不能再 `PUT` 覆寫或 `DELETE`（`details: { publishedAt }`），改內容請推新的 rev；對「已發布但不是現行版」的版次再 `publish` 也是這個（`details: { current }`），要切回請用 `POST …/<period>/current` |
+| 409 | `LINEAGE_MISMATCH` | 報告發布或切換現行版時 lineage 不符，**什麼都沒改、現行版不變**；`error.details` 是 `{ failed: [原因碼…] }`（原因碼見「報告兩層發布」） |
+| 409 | `NOT_PUBLISHED` | 切換現行版（`POST …/<period>/current`）的目標沒有用發布端點發布過 |
 | 413 | `TOO_LARGE` | 文件超過 256 KB，或請求本文超過上限：雲端文件 300 KB、帳號端點（`/api/auth/*`）4 KB、報告請求 4 KB、報告參考檔單檔 20 MiB |
 | 429 | `RATE_LIMITED` | 每個 IP 每分鐘：`/api/market/*`、`/api/auth/logout`／`me`／`config` 與其他帶權杖的 `/api/*` 合計 30 次；`/api/store*` 與 `/api/reports/<code>/inputs*` 各 60 次；註冊＋登入＋改密碼＋重設密碼 10 次（登入與重設另外每個帳號 30 次）；`/api/news` 沒命中快取的新查詢 6 次。IPv6 以 /64 為一組，超過一律帶 `Retry-After: 30`（跨來源時瀏覽器讀不到這個標頭，請預設等 30 秒）。`/data/*` 用唯讀或寫入權杖不受限；用登入權杖時，後端偶爾要查一次登入狀態，那一次計入 30 次 |
 | 503 | `LIVE_UNAVAILABLE` | FinMind 盤中即時（`/api/market/live`）沒啟用、還沒抓到過或暫時讀不到；改用 `/api/market/intraday`（2026-10-28，K-54） |
@@ -484,8 +552,22 @@ interface NewsSource {
 // GET /api/reports/<code>（不含 summary）、GET /api/reports/<code>/<period>/<rev>（含 summary）
 type ReportStatus = 'DRAFT' | 'PUBLISHED' | 'FAILED'
 interface ReportFile { name: string; url: string }
-interface ReportMeta { period: string; rev: number; status: ReportStatus; title: string; generatedAt: string; url: string | null; files: ReportFile[] }
-interface Report extends ReportMeta { summary: string | null; inputs: ReportInputRef[] }
+interface ReportMeta {
+  period: string; rev: number; status: ReportStatus; title: string; generatedAt: string; url: string | null; files: ReportFile[]
+  publishedAt: string | null  // 2026-11-13（REPORT-02）：發布端點發布的時間；舊流程、DRAFT 是 null
+  current: boolean            // 這一期的現行版
+}
+interface Report extends ReportMeta { summary: string | null; inputs: ReportInputRef[]; lineage: ReportLineage | null }
+// 2026-11-13（REPORT-02）：兩層發布的來源資訊（舊流程的報告是 null）
+interface ReportNewsItem { title: string; source: string; publishedAt: string; url: string; summary: string | null; matchedKeywords: string[] }
+interface ReportLineage {
+  reportVersion: string; run: string; runHash: string; requestId: number; scoreItemIds: string[]
+  publishedAt: string | null; current: boolean
+  pdf: { name: string; bytes: number; sha256: string; downloadable: boolean } | null
+  news: { id: string; sha256: string; createdAt: string; items: ReportNewsItem[] } | null
+}
+// 409 LINEAGE_MISMATCH 的 error.details
+interface ReportLineageMismatchDetails { failed: string[] }
 // 報告參考檔（登入權杖；GET /api/reports/<code>/<period>/<rev> 的 inputs 是不含 code／createdBy／locked 的 ReportInputRef）
 type ReportInputMime = 'application/pdf' | 'text/plain' | 'text/markdown' | 'text/csv' | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' | 'image/png' | 'image/jpeg'
 interface ReportInputRef { id: string; name: string; mime: ReportInputMime; bytes: number; sha256: string; createdAt: string }
