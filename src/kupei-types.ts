@@ -502,6 +502,13 @@ export interface ReportMeta {
   /** https 或 null */
   url: string | null
   files: ReportFile[]
+  /**
+   * REPORT-02（2026-11-13）：用 publish 發布的時間（ISO 8601，UTC）。DRAFT、FAILED、舊方式直接推 PUBLISHED 的是 null。
+   * 舊後端沒有這個欄位時當 null（kupei-client.ts 的 normalizeReportMeta／normalizeReport 會補）
+   */
+  publishedAt: string | null
+  /** REPORT-02：是不是這一期的現行版（沒有用 publish 發布過的期別全部 false）。舊後端沒有時當 false（normalizeReportMeta 會補） */
+  current: boolean
 }
 
 /** GET /api/reports/<code>/<period>/<rev>：多了 summary（純文字或 markdown，可能 null）與引用的參考檔 */
@@ -509,6 +516,41 @@ export interface Report extends ReportMeta {
   summary: string | null
   /** 報告引用的參考檔 metadata（2026-10-28 起；沒有引用是空陣列）。下載只限上傳者本人（kupei.reportInputs.download） */
   inputs: ReportInputRef[]
+  /** REPORT-02：兩層發布的 lineage；推送時沒帶 publication 的版次是 null（舊後端沒有這個欄位時當 null，normalizeReport 會補） */
+  lineage: ReportLineage | null
+}
+
+/** REPORT-02 新聞快照的一則（只有標題、來源、時間、原文連結、規則式摘要；不含全文） */
+export interface NewsSnapshotItem {
+  title: string
+  source: string
+  /** ISO 8601（UTC） */
+  publishedAt: string
+  /** https */
+  url: string
+  summary: string | null
+  matchedKeywords: string[]
+}
+
+/** REPORT-02（2026-11-13）：報告兩層發布的 lineage（PDF 母檔、新聞快照、評分項目、產生請求） */
+export interface ReportLineage {
+  reportVersion: string
+  /** 產生這一版用的評分批次 */
+  run: string
+  /** 16 位小寫 hex */
+  runHash: string
+  /** 產生請求的 id */
+  requestId: number
+  /** 引用的評分項目 id */
+  scoreItemIds: string[]
+  /** publish 的時間；DRAFT 是 null */
+  publishedAt: string | null
+  /** 是不是這一期的現行版 */
+  current: boolean
+  /** PDF 母檔的 metadata（參考檔已刪除是 null）。downloadable 為 true 才能 kupei.reportPdf 下載（已用 publish 發布的版次） */
+  pdf: { name: string; bytes: number; sha256: string; downloadable: boolean } | null
+  /** 推送時引用的新聞快照（快照不存在是 null） */
+  news: { id: string; sha256: string; createdAt: string; items: NewsSnapshotItem[] } | null
 }
 
 /** 報告引用的參考檔（不含上傳者） */
